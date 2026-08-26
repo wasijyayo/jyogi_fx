@@ -29,9 +29,15 @@ func main() {
 }
 
 func runServe() error {
+	// Cloud Run はリッスンポートを PORT で渡してくる規約。
+	// ローカルでは ADDR (":8080" 等) で上書きできるようにしておく。
 	addr := os.Getenv("ADDR")
 	if addr == "" {
-		addr = ":8080"
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		addr = ":" + port
 	}
 
 	mux := server.NewMux()
