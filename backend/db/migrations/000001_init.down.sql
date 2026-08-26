@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS sessions_auth;
+DROP TABLE IF EXISTS users;
