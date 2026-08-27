@@ -12,7 +12,12 @@ dist/
 frontend/dist/
 
 # generated (regenerate via `make gen`)
-backend/internal/db/
+# ディレクトリ全体ではなくファイル単位で無視する。
+# 手書きの検証用テスト（*_test.go）を backend/internal/db/ に置けるようにするため。
+backend/internal/db/db.go
+backend/internal/db/models.go
+backend/internal/db/querier.go
+backend/internal/db/*.sql.go
 frontend/src/api/generated/
 
 # editors / OS
