@@ -1,15 +1,27 @@
 // Package server はこのアプリの HTTP ハンドラ層（① 入口 → ② サービス層を呼ぶだけの層）。
+// ロジックを書かず、internal/game のサービス層を呼んで出力の形を変えるだけにする（CLAUDE.md §3）。
 package server
 
 import (
 	"net/http"
+
+	"fxgame/backend/internal/game"
 )
 
+// Config は NewMux が必要とする依存をまとめたもの。
+type Config struct {
+	Auth *game.AuthService
+
+	// SecureCookies が true のとき Cookie に Secure 属性を付ける。
+	// Cloud Run（本番）では true、ローカル開発（http://localhost）では false にする。
+	SecureCookies bool
+}
+
 // NewMux は HTTP ルーティングを組み立てる。
-// Walking Skeleton の現段階では /health のみ。
-func NewMux() *http.ServeMux {
+func NewMux(cfg Config) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	registerAuthRoutes(mux, cfg)
 	return mux
 }
 
