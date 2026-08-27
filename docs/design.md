@@ -20,7 +20,7 @@ Discord 連携型 FX トレーディングゲームの設計詳細。
 
 ### 1 日 1 時間という制約
 
-取引可能時間は 1 日 1 時間のみ（具体的な時刻は未確定）。
+取引可能時間は 1 日 1 時間のみ。**JST 12:00〜13:00、毎日（曜日を問わず）**（確定 #13）。
 
 これは制約ではなく**設計上の武器**。
 
@@ -104,83 +104,354 @@ hash(通貨ID, floor(時刻 / 60秒)) → 疑似乱数 → 補間
 読まれた瞬間に経過時間から計算するだけなので、インスタンスが落ちていても
 次にアクセスされた時点で正しい価格が求まる。常時起動を避ける要件と噛み合う。
 
-### 2.7 寄り付きギャップ
+### 2.7 セッション外の価格推移と寄り付きギャップ
 
-セッション外も基準価格は動き続ける（時刻の純関数なので自動的にそうなる）。
+#### 原則: 乱数は tick 番号の純粋関数
 
-結果として翌日の開始時に価格が飛んでいる。
+`base` は「毎tick積み上げる状態」ではなく、**tick番号を与えると値が返る関数**として定義する。
 
-- ポジションを持ち越すか決める緊張感が生まれる
-- 開始直後の数分が最もおいしい時間になり、**定刻ログインの動機**になる
-- 実装コストはゼロ
+```
+base(n) = base₀ × exp( Σ_{i=1}^{n} volatility × scale(i) × z(seed, i) )
+```
 
-「昨日の終値 → 今日の始値」のギャップを開始時に Bot が発表する。
+この定義により、セッション外にサーバーを起動する必要がなくなる。
+セッション開始時に経過tick数を数え、その分をまとめて算出すれば、
+毎分計算した場合と**完全に同一の結果**が得られる。
 
-### 2.8 パラメータは DB に持つ
+**禁止事項**: `z` を `rand.New(rand.NewSource(seed))` の逐次生成で実装してはならない。
+Go の `math/rand` は途中位置からの再開ができないため、
+セッション開始のたびに通貨生成時点から全tickを引き直す必要が生じる（→ §9.11）。
+
+#### z の生成
+
+tick番号とシードをハッシュ化し、Box-Muller 変換で正規乱数に変換する。
+
+```go
+func zAt(seed uint64, tick int64) float64 {
+    buf := make([]byte, 16)
+    binary.LittleEndian.PutUint64(buf[0:], seed)
+    binary.LittleEndian.PutUint64(buf[8:], uint64(tick))
+    h := xxhash.Sum64(buf)
+
+    u1 := float64(h>>11) / float64(1<<53)
+    u2 := float64((h*2654435761)>>11) / float64(1<<53)
+    return math.Sqrt(-2*math.Log(u1+1e-15)) * math.Cos(2*math.Pi*u2)
+}
+```
+
+`z` は tick番号のみに依存し、呼び出し順序に依存しない。
+任意のtick位置の値を単独で取得できる。
+
+#### セッション外のボラティリティ抑制
+
+セッション外は `volatility` に係数 `off_session_scale` を掛ける。
+
+```go
+func scaleAt(tick int64) decimal.Decimal {
+    minuteOfDay := (tick + epochOffset) % 1440
+    if minuteOfDay >= sessionStartMinute && minuteOfDay < sessionStartMinute+60 {
+        return decimal.NewFromInt(1)
+    }
+    return currency.OffSessionScale
+}
+```
+
+**初期値: `off_session_scale = 0.0500`**
+
+抑制しない場合、一晩1380tickで σ = 0.0020 × √1380 = **7.4%** の窓が開き、
+レバレッジ10倍の持ち越し建玉が寄り付きで確実に清算される。
+
+| off_session_scale | 一晩の窓(σ) | 判定 |
+|---|---|---|
+| 0 | 0% | 窓なし。時間外に何も起きない |
+| **0.05** | **0.37%** | **採用。持ち越しが罰にならない** |
+| 0.1 | 0.74% | 軽い窓 |
+| 0.2 | 1.5% | 明確な窓。10倍持ち越しは危険 |
+| 1.0 | 7.4% | 全滅 |
+
+#### 寄り付き処理の順序
+
+```
+1. 経過tick数を算出   nowTick = (現在時刻 - epoch_at) / 1分
+2. base(nowTick) を算出（保存済みの最終tickから差分ループ）
+3. pressure は 0 にリセット（セッション外は注文が入らないため）
+4. price = base × exp(0) = base
+5. 寄り付きキャンドルを1本保存（後述 → §2.8）
+6. 全持ち越し建玉の含み損益・equity を再計算
+7. 清算判定・執行
+8. /claim 用の中央値を算出し sessions に保存
+9. セッション開始
+```
+
+清算判定を寄り付きに繰り延べるのは§7.4の決定どおり。
+セッション外に清算処理を走らせないため、常時稼働が不要になる。
+
+#### 計算負荷
+
+1tickあたり約100ns。一晩1380tickで0.14ms、100日分14万tickでも15ms。
+CPU負荷は考慮不要。
+
+### 2.8 price_ticks スキーマと OHLC
+
+#### セッション外のtickは保存しない
+
+`base` は純粋関数のため、セッション外の値は必要になった時点で再計算できる。
+保存すると一晩1380行 × 通貨数が発生し、Neon無料枠を圧迫するため保存しない（→ §9.12）。
+
+実際のFXチャートも週末のローソクは存在せず、月曜に窓が開くのみ。同じ挙動とする。
+
+保存対象は **セッション中の60tick + 寄り付き1本 = 61本/セッション/通貨**。
+
+#### スキーマ
+
+```sql
+CREATE TABLE price_ticks (
+    id           BIGSERIAL   PRIMARY KEY,
+    currency_id  BIGINT      NOT NULL REFERENCES currencies(id),
+    session_id   BIGINT      NOT NULL REFERENCES game_sessions(id),
+    tick_index   BIGINT      NOT NULL,  -- 通貨生成時点からの通算tick番号
+    ticked_at    TIMESTAMPTZ NOT NULL,
+
+    base_price   NUMERIC(20,10) NOT NULL,  -- 圧力を含まない基準価格
+    pressure     NUMERIC(20,10) NOT NULL,  -- そのtick終了時点の圧力
+    net_volume   NUMERIC(20,10) NOT NULL,  -- そのtickの買い-売り差額
+
+    open         NUMERIC(20,10) NOT NULL,
+    high         NUMERIC(20,10) NOT NULL,
+    low          NUMERIC(20,10) NOT NULL,
+    close        NUMERIC(20,10) NOT NULL,
+
+    is_opening   BOOLEAN NOT NULL DEFAULT FALSE,  -- 寄り付きキャンドルか
+
+    UNIQUE (currency_id, tick_index)
+);
+
+CREATE INDEX idx_price_ticks_session ON price_ticks (session_id, currency_id, tick_index);
+```
+
+`pressure` と `net_volume` を保存するのは、清算の原因分析（乱数起因か圧力起因か）のため。
+§12の調整フェーズで使用する。
+
+`currency_id` / `session_id` は他テーブル（`currencies` / `game_sessions`）に合わせて
+`BIGINT` とする（旧ドラフトの `UUID` 表記は誤り。§8 の統一スキーマで確定）。
+
+> **`price_candles` は廃止し `price_ticks` に統一した（→ §3, §8, §9.16）。**
+> 列構成の重複は解消済み。旧 `price_candles` の設計意図は §9.16 に却下理由として残す。
+
+#### OHLC の定義
+
+1tick内に価格の推移は存在しない（tick境界でのみ価格が確定するため）。
+したがって1分足のOHLCは以下で確定する。
+
+```
+open  = 前tickの close
+close = 当tickの price
+high  = max(open, close)
+low   = min(open, close)
+```
+
+**1分足にヒゲは生えない。** 実体のみの棒になる。
+ヒゲは5分足以上に集約したときに初めて出現する（→ §9.15）。
+
+```sql
+-- 5分足への集約
+SELECT
+    (tick_index / 5) AS bucket,
+    (array_agg(open  ORDER BY tick_index))[1]          AS open,
+    MAX(high)                                          AS high,
+    MIN(low)                                           AS low,
+    (array_agg(close ORDER BY tick_index DESC))[1]     AS close
+FROM price_ticks
+WHERE session_id = $1 AND currency_id = $2
+GROUP BY bucket
+ORDER BY bucket;
+```
+
+#### 寄り付きキャンドルの生成（確定 #19）
+
+```
+open       = 前セッション最終tickの close（初回は initial_price）
+close      = base(nowTick)
+high       = max(open, close)
+low        = min(open, close)
+pressure   = 0
+is_opening = TRUE
+tick_index = nowTick
+```
+
+**`open` に「開始時点の基準価格」を使わないこと。**
+open = close となり実体長がゼロになるため、チャート上で窓が視認できない。
+前日終値を置くことで、実体の長さがそのまま窓の大きさになる。
+
+セッション外は注文が入らないため `pressure = 0`。
+前セッション終了時の圧力は破棄する（`e^(-λ×1380)` により既にほぼ完全消滅している）。
+
+セッション外の tick は保存しない（§2.8 冒頭のとおり）。`tick_index` に穴が空くが
+意図した状態であり、チャート描画は `tick_index` の連続性ではなく行の順序で行う。
+
+#### 窓の大きさ（off_session_scale = 0.05）
+
+23時間（1380tick）経過時、§2.12 で確定した `volatility` を用いると:
+
+| 通貨 | 窓σ | 2σ | 3σ | 清算距離 |
+|---|---|---|---|---|
+| JOG | 0.149% | 0.30% | 0.45% | 5% |
+| WASI | 0.372% | 0.74% | 1.12% | 5% |
+| CHEBU | 0.706% | 1.41% | 2.12% | 5% |
+
+3σでも清算距離に届かないため、**窓そのものによる清算は事実上発生しない**
+（§2.7 で off_session_scale = 0.05 を採用した根拠の裏付け）。
+
+#### セッション開始通知（#通知 チャンネル）
+
+清算処理の**後**に 1 件投稿する。閾値は経過tick数から動的に算出する。
+
+```go
+sigma := volatility × offSessionScale × sqrt(elapsedTicks)
+isLarge := |gapRate| > sigma × 2
+```
+
+通常時:
+
+```
+📈 セッション開始
+
+JOG    100.42 → 100.57   +15 pips  (+0.15%)
+WASI    98.31 →  98.68   +37 pips  (+0.38%)
+CHEBU  103.77 → 102.98   -79 pips  (-0.76%)
+
+一晩の値動きです。
+```
+
+2σ超え時は見出しを「⚠️ セッション開始 — 大きな窓」に変更し、該当通貨の行末に ⚠️ を付す。
+pips = `(close - open) / 0.01`、整数に丸め。
+
+> `is_opening = TRUE` の行はチャート上で色を変えるなど、
+> 通常のtickと区別した表示ができるようにしておく。
+
+### 2.9 currencies に追加するカラム
+
+**§8 の `currencies` CREATE TABLE に統合済み。** 以下は追加理由の記録として残す
+（新規マイグレーションとしてこの ALTER を別途流す必要はない）。
+
+```sql
+ALTER TABLE currencies
+    ADD COLUMN off_session_scale NUMERIC(6,4) NOT NULL DEFAULT 0.0500,
+    ADD COLUMN seed              BIGINT       NOT NULL,
+    ADD COLUMN epoch_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    ADD COLUMN max_leverage      NUMERIC(6,2) NOT NULL DEFAULT 10.00,
+    ADD COLUMN fee_rate          NUMERIC(8,6) NOT NULL DEFAULT 0.000500;
+```
+
+| カラム | 意味 | 単位 |
+|---|---|---|
+| `off_session_scale` | セッション外の volatility 係数 | 無次元（0〜1） |
+| `seed` | 乱数シード。通貨ごとに固定 | — |
+| `epoch_at` | tick_index = 0 の時刻 | — |
+| `max_leverage` | この通貨のレバレッジ上限 | 倍 |
+| `fee_rate` | この通貨の片道手数料率 | 無次元（0〜1） |
+
+`epoch_at` は通貨生成時に確定し、**以降変更してはならない**。
+変更すると過去の全tickの値が変わり、チャートの履歴が崩壊する。
+
+`max_leverage` / `fee_rate` は §7.0 で決めたグローバルデフォルト（10 倍 / 0.05%）を
+**通貨ごとに上書きできる**ようにするための列。MVP の初期3通貨はいずれもデフォルト値のまま
+（→ §2.12）だが、将来ユーザーが通貨を作成する際（§10.1）に通貨ごとの調整余地を残す。
+
+### 2.10 表示面の分離（第1段階）
+
+| 面 | 中身 | 使用するデータ |
+|---|---|---|
+| Discord | ティッカー（Unicodeスパークライン）、スラッシュコマンド | `close` のみ |
+| React SPA（将来） | ローソク足チャート、建玉一覧、注文フォーム | OHLC全て |
+
+第1段階は **Discord のみで機能を完結**させる。
+SPAは後付けとし、APIは最初から両者が同一エンドポイントを叩く前提で設計する
+（oapi-codegen で定義 → 将来 orval でTSクライアント生成）。
+
+Discordに画像としてローソク足を出す案は不採用（→ §9.14）。
+
+### 2.11 パラメータは DB に持つ
 
 `λ` `k` `流動性深度` `volatility` `drift` は `currencies` テーブルの列にする。
 
 これがそのまま、将来の「ユーザーが通貨を作成して設定を変える」機能の実体になる。
 コードに定数として埋め込まない。
 
-### 2.9 初期通貨ラインナップ（#16）
+### 2.12 初期通貨ラインナップ（確定値 #16）
 
-**種類数と名前・性格付けは確定。** 具体的なパラメータ数値は未確定（引き続き相談しながら決める）。
+種類数・名前・性格付け・パラメータ数値のすべてが確定。
 
-| symbol | 性格 | 傾向 |
-|---|---|---|
-| `JOG` | 安定 | ボラティリティ低め・儲かりにくいが安心して持てる |
-| `WASI` | 中間 | JOG と CHEBU の中間 |
-| `CHEBU` | 大荒れ | ボラティリティ高め・ハイリスクハイリターン |
+| | JOG | WASI | CHEBU |
+|---|---|---|---|
+| 性格 | 安定 | 中間 | 大荒れ |
+| `drift` | 0 | 0 | 0 |
+| `volatility` | 0.0008 | 0.0020 | 0.0038 |
+| 半減期 | 5 分 | 4 分 | 3 分 |
+| `lambda` | 0.1386294361 | 0.1732867951 | 0.2310490602 |
+| `k` | 0.0045 | 0.0100 | 0.0180 |
+| `liquidity` | 75,000 | 40,000 | 18,000 |
+| `off_session_scale` | 0.0500 | 0.0500 | 0.0500 |
+| `max_leverage` | 10.00 | 10.00 | 10.00 |
+| `fee_rate` | 0.000500 | 0.000500 | 0.000500 |
+| `initial_price`（`base_price` 初期値） | 100.00 | 100.00 | 100.00 |
+| `seed` | 1001 | 2002 | 3003 |
 
-`drift` / `volatility` / `lambda`（減衰速度） / `k`（価格影響度） / `liquidity`（流動性深度）
-の具体的な数値は未確定。§2.4 の「半減期 3〜5 分」を軸に、
-JOG は半減期長め・liquidity 高め（動きにくい）、CHEBU は半減期短め・liquidity 低め（少額でも動く）、
-WASI はその中間、という方向性のみ合意済み。
+- `drift = 0`: 3 通貨とも長期トレンドの向きは持たせない。値動きは `volatility` によるランダムウォークのみで、
+  §2.5 で触れていた「数日〜1 週間ごとのトレンド反転」は初期リリースでは採用しない
+  （`drift` 列自体は残すので、後から値を入れれば有効化できる）
+- `lambda` は `ln(2) / 半減期（分）` で算出（tick = 1 分のため、単位は「1 分あたり」）。
+  半減期 5/4/3 分がそれぞれ `lambda` 0.1386294361 / 0.1732867951 / 0.2310490602 に対応する
+- `max_leverage` / `fee_rate` は §7.0 のグローバルデフォルトと同値。3 通貨とも上書きなし
+- `off_session_scale` は §2.7 のデフォルト値 0.0500 をそのまま採用
 
 ---
 
 ## 3. データモデル
 
+**このセクションは `price_ticks`（§2.8）に統一済み。** 旧 `price_candles` 案は §9.16 に却下理由とともに移動した。
+
 ### 3.1 役割分担
 
 | データ | 役割 |
 |---|---|
-| 乱数シード | **未来を生成する**（セッション中のリアルタイム価格算出） |
-| `price_candles` | **過去を表示する**（確定した事実） |
+| 乱数シード | **未来を生成する**（`base(n)` の算出。§2.7） |
+| `price_ticks` | **過去を表示する**（確定した事実。セッション中の 60 tick + 寄り付き 1 本のみ保存） |
 | `trades` | 誰が何をしたか。約定価格も記録 |
 | `events` | チャート上に「ここで暴落」と注釈を重ねる |
 
-**シードは未来のため、キャンドルは過去のため。** 両方を再現に使わない（→ §9.2）。
+**シードは未来のため、`price_ticks` は過去のため。** 両方を再現に使わない（→ §9.2）。
+セッション外の tick は保存せず、`base(n)` の再計算で賄う（→ §2.8）。
 
-### 3.2 毎分の tick でキャンドルを確定保存
+### 3.2 毎分の tick で price_ticks を確定保存
 
 ```go
 func (s *Service) Tick(ctx context.Context, now time.Time) error {
-    minute := now.Truncate(time.Minute)
-
     currencies, err := s.db.ListCurrencies(ctx)
     if err != nil { return err }
 
     for _, c := range currencies {
-        base := s.BasePrice(c, now)        // 乱数シード由来
-        pressure := s.Pressure(c, now)     // 需給圧力（減衰込み）
+        tickIndex := elapsedTicks(c, now)      // epoch_at からの通算 tick 番号
+        base := s.BasePrice(c, tickIndex)      // §2.7: tick番号の純粋関数
+        pressure := s.Pressure(c, now)         // 需給圧力（減衰込み）
         price := base.Mul(one.Add(pressure))
 
-        agg, err := s.db.AggregateTrades(ctx, c.ID,
-            minute.Add(-time.Minute), minute)
+        agg, err := s.db.AggregateTrades(ctx, c.ID, tickIndex)
         if err != nil { return err }
 
-        s.db.UpsertCandle(ctx, UpsertCandleParams{
-            CurrencyID:    c.ID,
-            MinuteAt:      minute,
-            Open:          agg.FirstPrice.OrElse(price),
-            High:          maxOf(agg.MaxPrice, price),
-            Low:           minOf(agg.MinPrice, price),
-            Close:         price,   // 取引ゼロでも価格は動くので必ず計算値
-            Volume:        agg.TotalSize,
-            BasePrice:     base,      // 人の影響を除いた価格
-            PressureClose: pressure,
+        s.db.UpsertPriceTick(ctx, UpsertPriceTickParams{
+            CurrencyID: c.ID,
+            SessionID:  currentSessionID,
+            TickIndex:  tickIndex,
+            TickedAt:   now,
+            BasePrice:  base,                          // 人の影響を除いた価格
+            Pressure:   pressure,
+            NetVolume:  agg.BuyVolume.Sub(agg.SellVolume),
+            Open:       agg.FirstPrice.OrElse(price),
+            High:       maxOf(agg.MaxPrice, price),
+            Low:        minOf(agg.MinPrice, price),
+            Close:      price,                         // 取引ゼロでも価格は動くので必ず計算値
+            IsOpening:  false,
         })
     }
     return nil
@@ -190,14 +461,17 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error {
 **`Close` は必ず「その瞬間の計算価格」を入れる。**
 取引ベースで OHLC を作ると、取引がない分に穴が空く。
 
+寄り付き（`IsOpening: true`）の生成手順は §2.8「寄り付きキャンドルの生成」を参照。
+
 ### 3.3 データ量
 
-1 日 60 分 × 通貨数。通貨 5 種なら **1 日 300 行**、1 年で約 11 万行。
+1 セッション 60 tick + 寄り付き 1 本 = **61 行 / 通貨 / 日**。
+初期 3 通貨（JOG/WASI/CHEBU）なら **1 日 183 行**、1 年で約 6.7 万行。
 無料枠にまったく影響しない。
 
-24 時間市場ならこうはいかないが、1 日 1 時間なのでこの方式が成立する。
+セッション外の tick を保存しないため、24 時間市場に比べて桁違いに少ない（→ §9.12）。
 
-### 3.4 `base_price` / `pressure_close` 列の意味
+### 3.4 `base_price` / `pressure` 列の意味
 
 チャート上に 2 本の線を描ける。
 
@@ -208,15 +482,18 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error {
 日次まとめで「本日 GBP は参加者によって本来より +8.2% 押し上げられました」
 のような集計も SUM するだけで出せる。
 
+`pressure` はそのtick終了時点の需給圧力そのもの。`net_volume` と合わせて保存することで、
+清算の原因分析（乱数起因か圧力起因か）に使える（→ §2.8）。
+
 ### 3.5 High / Low の精度
 
-毎分 1 回のサンプリングでは瞬間的なヒゲを捕捉できないが、
+**1 分足にヒゲは生えない。** tick 境界でのみ価格が確定する設計のため
+（§2.8「OHLC の定義」）、1 tick 内に価格の推移は存在しない。
 
 - 実際に**約定した価格**は `trades` に残るので取引範囲は正確
-- 誰も取引していない瞬間の理論上のヒゲはゲーム的に意味がない
+- ヒゲは 5 分足以上に集約したときに初めて出現する（§2.8 の集約クエリ）
 
-より滑らかにしたい場合、tick 内で 10 秒刻みに 6 点だけ基準価格を計算して
-min/max を取る（基準価格は時刻の純関数なので過去の点も計算可能）。
+sub-tick（tick 内をさらに分割してヒゲを作る）は不採用（→ §9.15）。
 
 ### 3.6 tick の欠損
 
@@ -224,13 +501,18 @@ Cloud Scheduler の失敗やコールドスタートで tick が飛びうる。
 
 **対応: 欠損は放置し、描画側で線形補間する。**
 1 分の穴はチャート上ほぼ見えないため、複雑な穴埋めロジックを持つ価値はない。
+`price_ticks` 側は `tick_index` に穴が空くだけで、書き込みは `UPSERT`（§8）で冪等にする。
 
 ---
 
 ## 4. 毎分 tick が担当する処理
 
-Cloud Scheduler の cron を `* HH * * *`（取引時間の 1 時間だけ毎分）で設定。
+Cloud Scheduler の cron を `* 12 * * *`（JST タイムゾーン指定、12:00〜13:00 の毎分）で設定。
 1 日 60 回、無料枠 1 ジョブに収まる。
+
+**コールドスタート対策: 11:55 にウォームアップ用のジョブを 1 本追加する。**
+`/health` への GET など軽いリクエストを 1 回送るだけの別 Cloud Scheduler ジョブを設定し、
+12:00 の取引開始時点でインスタンスが立ち上がった状態にしておく（確定 #13）。
 
 **時間駆動の処理をすべてここに集約する。**
 
@@ -400,6 +682,18 @@ GBP  191.02  ▲+3.4%  ▁▁▂▃▅▇██  🔥
 - **強制ロスカット通知**（→ §6.8）
 - **イベント予兆・発生通知**
 - **セッション開始 5 分前の予告 / 終了 5 分前の警告**
+- **セッション開始時の寄り付きギャップ通知**（確定 #19 → §2.8「セッション開始通知」）
+- **セッション終了時の持ち越し予告**（確定 #19、採用）:
+
+  ```
+  🌙 セッション終了
+
+  本日の結果は追ってお知らせします。
+  持ち越し中の建玉がある方はご注意ください。
+  明日の寄り付きまでに価格が変動します。
+  ```
+
+  個別の建玉内容は晒さない（翌日の狙い撃ちを防ぐため）。
 - **日次まとめ**（→ §6.9）
 
 **毎日の定例ランキング投稿は行わない**（くどくなるため）。
@@ -456,6 +750,37 @@ GBP  191.02  ▲+3.4%  ▁▁▂▃▅▇██  🔥
   （忘れると API が 403 を返す）
 - Discord API のレート制限に注意。逐次処理 + リトライ、
   失敗しても次回で回復する**冪等な**作りにする
+
+### 6.11 チャンネル構成（確定 #18）
+
+**3 チャンネル構成を採用。**
+
+| チャンネル | 用途 | 中身 | 頻度の目安 |
+|---|---|---|---|
+| **#取引** | スラッシュコマンドの実行場所 | `/rank` `/balance` `/claim` `/positions` `/price` 等（§6.6） | セッション中（12:00〜13:00）に集中 |
+| **#ティッカー** | 市況の常時表示 | 1 メッセージを毎分編集（§6.4） | 見た目上の変化なし（編集のみ） |
+| **#通知** | Bot からの一方向発信 | 大口取引・イベント予兆／発生・強制ロスカット（§6.7〜6.8）・日次まとめ（§6.9） | 1 日 10〜30 件程度 |
+
+日次まとめ（§6.9）は独立チャンネルにせず、**#通知に統合**する
+（issueの選択肢「同一でも可」を採用）。
+
+編集対象のティッカーメッセージ ID・各チャンネル ID は `game_sessions` または
+設定用テーブル／環境変数に保存する。
+
+#### 通知チャンネルのミュートについて
+
+Discord の「サーバー全体の通知設定」はメンバー個人のクライアント設定であり、
+**Bot・サーバー管理者側から他メンバーの通知設定を強制的に変更する API は存在しない**
+（プライバシー上、本人しか変更できない）。したがって「初期設定でミュート」は技術的に実現できない。
+
+代わりに以下で体感的なうるささを抑える。
+
+- **#通知への投稿では `@everyone` / `@here` を使わない。** メンションしなければ
+  多くのクライアント設定（既定の「@メンションのみ通知」）では音・プッシュ通知が鳴らない
+- オンボーディング（初回案内メッセージ）で「#通知は右クリック→通知をミュート で
+  静かにできます」と案内する
+- 日次まとめ以外は Embed の色・絵文字で内容の重要度が一目で分かるようにし、
+  全文を読まなくても流し見できるようにする（§6.5 の Embed 色分けと同じ考え方）
 
 ---
 
@@ -547,11 +872,19 @@ DB に `season_id` を最初から入れておけば後付けできる。
 
 強制ロスカットも同じ扱いになる。
 
+### 7.9 駆け込み取引の制限（確定 #14）
+
+**セッション終了 1 分前（12:59 台）から新規注文を制限する。**
+
+- 12:59:00〜12:59:59 の間は新規の成行・指値・逆指値注文を受け付けない
+- 既存ポジションの決済（クローズ）を同時間帯に許可するかは未確認（実装前に確認）
+
 ---
 
 ## 8. DB スキーマ（ドラフト）
 
 **未確定。実装前に確認すること。** 金額系はすべて `NUMERIC(20,8)`。
+`price_ticks` は §2.8 の tick-index 純粋関数モデルに統一済み（旧 `price_candles` は §9.16）。
 
 ```sql
 CREATE TABLE users (
@@ -570,19 +903,24 @@ CREATE TABLE sessions_auth (          -- Cookie セッション（インスタ�
 );
 
 CREATE TABLE currencies (
-    id              BIGSERIAL   PRIMARY KEY,
-    symbol          TEXT        NOT NULL UNIQUE,
-    name            TEXT        NOT NULL,
-    base_price      NUMERIC(20,8) NOT NULL,
-    drift           NUMERIC(20,8) NOT NULL,   -- トレンドの向き
-    volatility      NUMERIC(20,8) NOT NULL,
-    lambda          NUMERIC(20,8) NOT NULL,   -- 減衰速度（半減期 3〜5 分相当）
-    k               NUMERIC(20,8) NOT NULL,   -- 取引の価格影響度
-    liquidity       NUMERIC(20,8) NOT NULL,   -- 流動性深度
-    pressure        NUMERIC(20,8) NOT NULL DEFAULT 0,
-    pressure_at     TIMESTAMPTZ NOT NULL,
-    created_by      TEXT        REFERENCES users(discord_id),  -- NULL = システム通貨
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                 BIGSERIAL   PRIMARY KEY,
+    symbol             TEXT        NOT NULL UNIQUE,
+    name               TEXT        NOT NULL,
+    base_price         NUMERIC(20,8) NOT NULL,   -- initial_price（epoch_at 時点の基準価格。§2.12）
+    drift              NUMERIC(20,8) NOT NULL,   -- トレンドの向き
+    volatility         NUMERIC(20,8) NOT NULL,
+    lambda             NUMERIC(20,8) NOT NULL,   -- 減衰速度（tick=1分あたり。§2.12）
+    k                  NUMERIC(20,8) NOT NULL,   -- 取引の価格影響度
+    liquidity          NUMERIC(20,8) NOT NULL,   -- 流動性深度
+    pressure           NUMERIC(20,8) NOT NULL DEFAULT 0,  -- セッション中のみ動く需給圧力の現在値
+    pressure_at        TIMESTAMPTZ NOT NULL,
+    off_session_scale  NUMERIC(6,4)  NOT NULL DEFAULT 0.0500,  -- §2.7
+    seed               BIGINT        NOT NULL,                 -- §2.7 zAt() 用
+    epoch_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),    -- tick_index = 0 の時刻。変更禁止
+    max_leverage       NUMERIC(6,2)  NOT NULL DEFAULT 10.00,    -- §7.0 デフォルトの通貨別上書き
+    fee_rate           NUMERIC(8,6)  NOT NULL DEFAULT 0.000500, -- §7.0 デフォルトの通貨別上書き
+    created_by         TEXT          REFERENCES users(discord_id),  -- NULL = システム通貨
+    created_at         TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 
 CREATE TABLE game_sessions (          -- 1 日 1 行
@@ -630,49 +968,62 @@ CREATE TABLE trades (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE price_candles (
-    currency_id     BIGINT      NOT NULL REFERENCES currencies(id),
-    minute_at       TIMESTAMPTZ NOT NULL,
-    open            NUMERIC(20,8) NOT NULL,
-    high            NUMERIC(20,8) NOT NULL,
-    low             NUMERIC(20,8) NOT NULL,
-    close           NUMERIC(20,8) NOT NULL,
-    volume          NUMERIC(20,8) NOT NULL DEFAULT 0,
-    base_price      NUMERIC(20,8) NOT NULL,    -- 人の影響を除いた価格
-    pressure_close  NUMERIC(20,8) NOT NULL,
-    PRIMARY KEY (currency_id, minute_at)
+CREATE TABLE price_ticks (             -- §2.8。セッション中の60tick + 寄り付き1本のみ保存
+    id           BIGSERIAL   PRIMARY KEY,
+    currency_id  BIGINT      NOT NULL REFERENCES currencies(id),
+    session_id   BIGINT      NOT NULL REFERENCES game_sessions(id),
+    tick_index   BIGINT      NOT NULL,  -- epoch_at からの通算tick番号
+    ticked_at    TIMESTAMPTZ NOT NULL,
+
+    base_price   NUMERIC(20,10) NOT NULL,  -- 圧力を含まない基準価格
+    pressure     NUMERIC(20,10) NOT NULL,  -- そのtick終了時点の圧力
+    net_volume   NUMERIC(20,10) NOT NULL,  -- そのtickの買い-売り差額
+
+    open         NUMERIC(20,10) NOT NULL,
+    high         NUMERIC(20,10) NOT NULL,
+    low          NUMERIC(20,10) NOT NULL,
+    close        NUMERIC(20,10) NOT NULL,
+
+    is_opening   BOOLEAN NOT NULL DEFAULT FALSE,  -- 寄り付きキャンドルか
+
+    UNIQUE (currency_id, tick_index)
 );
+
+CREATE INDEX idx_price_ticks_session ON price_ticks (session_id, currency_id, tick_index);
 ```
 
 ### UPSERT（冪等性の確保）
 
 ```sql
--- name: UpsertCandle :exec
-INSERT INTO price_candles (
-    currency_id, minute_at, open, high, low, close,
-    volume, base_price, pressure_close
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-ON CONFLICT (currency_id, minute_at) DO UPDATE SET
-    high  = GREATEST(price_candles.high, EXCLUDED.high),
-    low   = LEAST(price_candles.low, EXCLUDED.low),
+-- name: UpsertPriceTick :exec
+INSERT INTO price_ticks (
+    currency_id, session_id, tick_index, ticked_at,
+    base_price, pressure, net_volume,
+    open, high, low, close, is_opening
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+ON CONFLICT (currency_id, tick_index) DO UPDATE SET
+    high  = GREATEST(price_ticks.high, EXCLUDED.high),
+    low   = LEAST(price_ticks.low, EXCLUDED.low),
     close = EXCLUDED.close,
-    volume = EXCLUDED.volume,
+    net_volume = EXCLUDED.net_volume,
     base_price = EXCLUDED.base_price,
-    pressure_close = EXCLUDED.pressure_close;
+    pressure   = EXCLUDED.pressure;
 ```
 
-tick が二重に走っても壊れず、high/low は正しく広がる方に更新される。
+tick が二重に走っても壊れず、high/low は正しく広がる方に更新される（CLAUDE.md §5.5）。
 
 ### 過去チャートの取得
 
 ```sql
--- name: ListCandles :many
-SELECT * FROM price_candles
-WHERE currency_id = $1 AND minute_at BETWEEN $2 AND $3
-ORDER BY minute_at;
+-- name: ListPriceTicks :many
+SELECT * FROM price_ticks
+WHERE currency_id = $1 AND session_id = $2
+ORDER BY tick_index;
 ```
 
-**再現ロジックは一切不要。** SELECT するだけ。
+**再現ロジックは一切不要。** SELECT するだけ。セッション外の窓は寄り付き1行（`is_opening = TRUE`）に
+圧縮されているため、複数セッションをまたいだ表示でも `tick_index` の穴を気にする必要はない
+（描画は行の順序で行う。§2.8）。
 
 ---
 
@@ -765,6 +1116,64 @@ tick は Cloud Scheduler、CI/デプロイは GitHub Actions という分担に�
 FX が分かりにくいのは概念のせいなので、先に触らせるのが最も効く。
 初回ログイン時に少額の練習ポジションを自動で持たせるだけでも理解度が変わる。
 
+### 9.10 セッション外も毎分tickを実行する
+
+Cloud Run の常時稼働が必要になり、scale-to-zero の制約に反する。
+`base` を tick番号の純粋関数にすることで、寄り付き一括算出に置き換えた（→ §2.7）。
+
+### 9.11 乱数を逐次生成（rand.NewSource + NormFloat64 のループ）で実装する
+
+途中位置からの再開ができないため、セッション開始のたびに
+通貨生成時点から全tickを引き直す必要が生じる。
+100日運用で14万回のループとなり、線形に増加し続ける。
+ハッシュベースの純粋関数に置き換えた（→ §2.7）。
+
+### 9.12 セッション外のtickも price_ticks に保存する
+
+一晩1380行 × 通貨数が発生し、年間200万行でNeon無料枠を圧迫する。
+`base` は純粋関数のため再計算可能であり、保存する必要がない。
+また実際のFXチャートも週末のローソクを持たない（→ §2.8）。
+
+### 9.13 セッション外は base を完全に停止する（off_session_scale = 0）
+
+窓が一切開かず、時間外に相場が動いている感覚が失われる。
+0.05 に設定することで、窓を0.37%程度に抑えつつ連続性の感覚を残した（→ §2.7）。
+
+### 9.14 Discord にローソク足を画像で投稿する
+
+サーバー側でPNG生成が必要になり、描画ライブラリの分だけコンテナが肥大化する。
+Cloud Run のコールドスタートが伸び、scale-to-zero の制約に対して不利。
+Discordはスパークライン（closeのみ）、ローソク足はSPA側という分離を維持する（→ §2.10）。
+
+> **§6.5 との不整合に注意。** §6.5「チャートの補助手段」では `/chart USD` による
+> PNG画像添付（`go-chart` / `gg`）を採用としている。この節の却下理由と矛盾するため、
+> どちらかを実装前に確定させること。
+
+### 9.15 1分足のOHLCを取引ごとに再計算して精緻化する
+
+tick境界でのみ価格が確定する設計のため、1tick内に価格の推移が存在しない。
+ヒゲを生やすには sub-tick の価格計算が必要になるが、
+5分足以上に集約すればヒゲは自然に出現するため不要と判断した（→ §2.8）。
+
+### 9.16 price_candles（時刻ベースのキャンドル保存）
+
+初期ドラフト（§3, §8 旧版）では、`minute_at`（時刻）を主キーに持つ `price_candles` テーブルを
+採用していた。tick番号ではなく実時刻でキャンドルを管理する案。
+
+**却下理由: tick-index 純粋関数モデル（§2.7）と役割が重複し、二重の真実を生むため。**
+
+- `base_price` を「時刻の純関数」として定義した §2.5〜2.6 の初期設計と、
+  「tick番号の純関数」として定義した §2.7 以降の設計は、本質的に同じ発想の異なる実装
+- 両方を残すと、どちらが正の価格ロジックかが曖昧になる
+  （§9.2 で警告した「価格ロジックが2箇所に存在する」問題と同種）
+- `tick_index` はセッション内の通し番号として整数で扱えるため、
+  `minute_at` のような実時刻ベースの主キーより「セッション外は保存しない」設計
+  （§2.8）と相性がよく、`price_ticks` に一本化した
+
+`price_candles` の列構成（`base_price` / `pressure_close` による2本線表示、UPSERTでの冪等性）
+という**設計思想自体は正しく**、そのまま `price_ticks` に引き継いでいる。テーブル名と
+主キーの取り方（時刻 → tick番号）を変更しただけで、失われた機能はない。
+
 ---
 
 ## 10. 将来の拡張（今は作らないが布石を打つ）
@@ -822,12 +1231,13 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error
 
 **実装前に必ず確認すること。勝手に決めない。**
 
-GitHub Issues の `design-decision` ラベル（#13〜#19、epicは #20）で個別に追跡している。
+GitHub Issues の `design-decision` ラベル（#13〜#19, #23、epicは #20）で個別に追跡している。
 
-- 取引時間の具体的な時刻（JST 何時〜何時か） — #13
-- セッション終了間際の駆け込み取引の扱い（ラスト 1 分は取引不可にするか等） — #14
+- ~~取引時間の具体的な時刻（JST 何時〜何時か）~~ — #13 **確定（→ §1, §4）: JST 12:00〜13:00 毎日**
+- ~~セッション終了間際の駆け込み取引の扱い~~ — #14 **確定（→ §7.9）: 終了1分前から新規注文停止**
 - ~~初期資金・レバレッジ上限・手数料率の具体値~~ — #15 **確定（→ §7.0）**
-- 通貨の初期ラインナップ（種類数と性格付け） — #16 **種類・名前・性格は確定（→ §2.9）。パラメータ数値は継続検討**
+- ~~通貨の初期ラインナップ（種類数と性格付け）~~ — #16 **確定（→ §2.12）: JOG/WASI/CHEBU、全パラメータ確定済み**
 - シーズンの長さ — #17（**当面決めない。MVPでは season_id 列だけ用意し、実装は保留**）
-- Discord チャンネル構成（ティッカー用 / 通知用 / まとめ用） — #18
-- 寄り付き時の初期キャンドル生成方法 — #19
+- ~~Discord チャンネル構成（ティッカー用 / 通知用 / まとめ用）~~ — #18 **確定（→ §6.11）: #取引 / #ティッカー / #通知（まとめは#通知に統合）**
+- ~~寄り付き時の初期キャンドル生成方法~~ — #19 **確定（→ §2.8）。`price_candles`（§3, §8）は `price_ticks` に統一済み（→ §9.16）**
+- イベントシステムの数値パラメータ・tick純粋関数モデルとの統合方法（§5, §2.7〜2.9） — #23（新規）
