@@ -28,6 +28,17 @@ CLAUDE.md には常に守るべきルールのみを置き、
 Discord の `/interactions` は Discord 側が定義したスキーマなので
 **OpenAPI には書かない**。手書きハンドラで受ける。
 
+### Issue ごとにブランチを切る
+
+GitHub Issue に対応する作業は **`main` に直接コミットせず、必ずブランチを切ってから実装する。**
+
+- ブランチ名は `wasijyayo/issueN`（N は issue 番号）
+- コミットメッセージの先頭行は `WS-N: 内容` のように issue のタイトルに合わせる
+- 実装が終わったら PR を作成し、本文に `closes #N` を書く
+- PR をマージして issue をクローズする（マージコミット、squash はしない）
+
+参考: PR #21（`wasijyayo/issue8`, issue #8 / WS-4）が実例。
+
 ### 縦切りで進める
 
 レイヤーごと（全 API → 全画面）ではなく、**機能ごとに端から端まで**通す。

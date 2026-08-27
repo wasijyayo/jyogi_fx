@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "db/queries"
+    schema: "db/migrations"
+    gen:
+      go:
+        package: "db"
+        out: "internal/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+        overrides:
+          # CLAUDE.md §5.2: 金額・価格・数量に float を使わない。
+          # NUMERIC は必ず decimal.Decimal にマップする。
+          - db_type: "numeric"
+            go_type: "github.com/shopspring/decimal.Decimal"
