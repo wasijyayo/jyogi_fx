@@ -530,33 +530,94 @@ OIDC トークン検証か共有シークレット。外部から叩かれると
 
 ---
 
-## 5. イベントシステム
+## 5. イベントシステム（確定 #23）
 
 ### 5.1 抽選と保存
 
 セッション開始時に**その日のイベントを抽選して DB に書き込む**。
-発火時刻を先に決めておき、tick が来た時に適用するだけにする。
+発火 tick を先に決めておき、tick が来た時に適用するだけにする（§5.4 で詳述）。
 
-1 日に 1〜2 回、相場が大きく動くイベントを発生させる。
+**1 日の発生回数（確定）:**
+
+| 回数 | 確率 |
+|---|---|
+| 1 回 | 10% |
+| **2 回** | **80%** |
+| 3 回 | 10% |
+
+期待値は 2.0 回/日。「毎日そこそこ何か起きるが、たまに静かな日・荒れる日がある」
+というブレを持たせるための分布。
+
+**抽選手順:**
+
+1. 上記の分布で今日の発生回数 `N` を決める
+2. `N` 回分、以下をそれぞれ独立に抽選する
+   - 種別: `shock` / `vol_up` / `liquidity_drain` から一様ランダム
+   - 対象通貨: JOG / WASI / CHEBU から一様ランダム
+   - 発火 tick: セッション内 tick 番号（1〜60）のうち **2〜55 の範囲で**一様ランダム
+     - 下限 2: 予兆（発火 1 tick 前 → §5.3）を必ず出せるようにするため
+     - 上限 55: 発火後に最低 5 tick（5 分）はプレイヤーが反応できる時間を残すため
+3. 同一通貨・同一 tick （`vol_up` / `liquidity_drain` は持続期間が重なる場合も含む）に
+   複数イベントが被った場合は再抽選する。効果が積み重なると何が起きたか分からなくなるため
 
 ```
-events: id, session_id, currency_id, type, fire_at, magnitude, resolved
+events: id, session_id, currency_id, type,
+        fire_tick, duration_ticks, magnitude, teased, resolved
 ```
+
+（列の詳細は §8。旧 `fire_at`（TIMESTAMPTZ）は `fire_tick`（tick番号）に変更 → §5.4）
 
 ### 5.2 イベントの種類
 
-効果が異なるものを混ぜる。
+効果が異なるものを混ぜる。**トレンド転換は廃止（→ 理由は末尾）。**
 
-| 種類 | 効果 | 面白さ |
-|---|---|---|
-| 急騰 / 暴落 | 基準価格を一撃で ±5〜15% | 分かりやすい。ロスカット祭り |
-| ボラ上昇 | `volatility` を数分間 3 倍に | じわじわ怖い |
-| 流動性枯渇 | `liquidity` を下げる = 少額でも価格が大きく動く | 大口が暴れやすくなる |
-| トレンド転換 | `drift` の符号を反転 | 持ち越し勢に効く |
+| 種類 | 効果 | duration_ticks | 面白さ |
+|---|---|---|---|
+| `shock`（急騰 / 暴落） | 基準価格を一撃で ±4〜14%（通貨ごとに固定値。下表） | 0（瞬間） | 分かりやすい。ロスカット祭り |
+| `vol_up`（ボラ上昇） | `volatility` を 3 倍に | 3〜5（ランダム） | じわじわ怖い |
+| `liquidity_drain`（流動性枯渇） | `liquidity` を 30% に（＝価格インパクトが約3.3倍） | 3〜5（ランダム） | 大口が暴れやすくなる |
 
-### 5.3 予兆（重要）
+#### shock の magnitude（確定値・理由つき）
 
-発火の 30〜60 秒前に曖昧な予告を Discord に投げる。
+§2.8 の清算距離（レバレッジ10倍・清算まで **5%**）を基準に、通貨の性格（§2.12）ごとに
+「どこまで踏み込ませるか」を変えた。
+
+| 通貨 | magnitude | 清算距離との比 | 意図 |
+|---|---|---|---|
+| JOG（安定） | **±4%** | 0.8 倍（清算距離未満） | 10倍持ち越しでも大抵は耐える。安定通貨の「一番の事件」でもこの程度、というキャラ付け |
+| WASI（中間） | **±8%** | 1.6 倍 | ポジション次第で明暗が分かれる。一番「読み合い」が生まれる強度 |
+| CHEBU（大荒れ） | **±14%** | 2.8 倍 | 逆方向に乗っていたレバレッジ持ちはほぼ確実に清算される。「ロスカット祭り」を体現する数値 |
+
+方向（急騰/暴落）は抽選時に 50/50 で決める。§2.12 で全通貨 `drift = 0` としたため
+方向に偏りを持たせる理由がなく、単純なコイントスでよい。
+
+#### liquidity_drain の値・理由（要相談だった部分）
+
+**`magnitude = 0.30`（liquidityを平常の30%に）、`duration_ticks` は `vol_up` と同じ 3〜5 のランダム。**
+
+- `liquidity` は 圧力更新式 `圧力 += k × (取引量 / liquidity)` の分母。30% にする＝
+  同じ取引量でも価格インパクトが **1/0.3 ≈ 3.3 倍**になる
+- `vol_up` の「3倍」と近い強度にそろえた。理由は 2 つ:
+  1. 2 つの「増幅系」イベントの体感を揃えることで、プレイヤーが
+     「今日は3倍イベント中」とだけ覚えればよくなり理解しやすい
+  2. 実装上も `duration_ticks` の抽選ロジックを共通化できる（§5.4）
+- 0.3 という値そのものの妥当性は未検証。実運用してみて「大口が全然暴れない/暴れすぎる」
+  ようなら調整する（§11.2 のシードリプレイで過去セッションを再検証できる）
+
+#### トレンド転換を廃止した理由
+
+§2.12 で JOG / WASI / CHEBU すべて `drift = 0` に確定したため、
+「`drift` の符号を反転する」イベントは反転前後どちらも 0 のままで**何も起きない**。
+`drift` 列自体は将来ユーザー作成通貨（§10.1）で非ゼロ値を使う可能性を残して残置するが、
+イベント種別としては削除する。
+
+### 5.3 予兆（重要・確定値）
+
+**発火の 1 tick（1 分）前に曖昧な予告を Discord（#通知）に投げる。**
+
+旧案の「30〜60秒前」という時刻ベースの幅は、tick モデルへの統一（§2.7〜2.9）に伴い
+「発火tickの 1 つ前の tick 処理で予兆を出す」という tick ベースの固定タイミングに変更した。
+tick処理のたびに `fire_tick - 1 == 現在tick` かどうかを見るだけで判定でき、実装がシンプルになる。
 
 ```
 📡 市場に何かの気配がします
@@ -567,6 +628,89 @@ events: id, session_id, currency_id, type, fire_at, magnitude, resolved
 
 発表文はイベント種別ごとにテンプレを 5〜10 個持たせてランダム選択し、
 飽きを防ぐ。トーンはユーモア寄り。
+
+### 5.4 tick 純粋関数モデルとの統合（一から整理）
+
+§2.7 の `base(n)` は「tick番号を与えると値が返る純粋関数」だった。
+イベントを導入するにあたり、この性質を壊さずに価格へ反映する方法を以下のとおり定める。
+
+#### 前提: イベントは事前に全て確定している
+
+§5.1 のとおり、その日のイベントは**セッション開始前に抽選し尽くして `events` テーブルに
+書き込む**。tick処理はそれを「参照するだけ」で、tick処理中に新しくサイコロを振ることはない。
+
+これが成立するからこそ、以下の式は「tick番号 → 値」の純粋関数のままでいられる。
+`events` テーブルの内容が変わらない限り、同じ `n` に対して常に同じ結果が返る。
+
+#### shock（瞬間ジャンプ）: 乗算項として扱う
+
+`shock` は「その tick で基準価格が一撃で ±magnitude% 動く」効果。
+これを `base(n)` の**乗算項**として追加する（ジャンプ拡散モデルと同じ考え方）。
+
+```
+base(n) = base₀
+    × exp( Σ_{i=1}^{n} volatility × scale(i) × volMul(currency, i) × z(seed, i) )
+    × Π_{e ∈ shockEvents(currency), e.fire_tick ≤ n} (1 + e.magnitude)
+```
+
+- `Π`（総乗）の対象は「発火tickが `n` 以下の `shock` イベント」。1 セッションに複数
+  `shock` が同じ通貨に当たることは §5.1 の重複回避ルールで基本ない（0 or 1 件が通常）
+- 事前抽選済みなので `fire_tick ≤ n` を満たす行を `events` から引くだけで計算できる。
+  過去のどの `n` を指定しても再計算結果は一致する（純粋関数の性質を維持）
+
+#### vol_up（一定期間の増幅）: volatility 側の乗数として扱う
+
+```go
+func volMul(currency Currency, tick int64) decimal.Decimal {
+    for _, e := range volUpEvents(currency) {
+        if tick >= e.FireTick && tick < e.FireTick+e.DurationTicks {
+            return e.Magnitude // 3.0
+        }
+    }
+    return decimal.NewFromInt(1)
+}
+```
+
+`scaleAt`（§2.7、セッション外抑制用）と同じ形。`events` テーブルを引くだけの
+純粋関数なので、`base(n)` 全体の純粋性を壊さない。
+
+#### liquidity_drain: base(n) には触れない
+
+`liquidity` は `base(n)`（乱数由来の基準価格）には登場しない。登場するのは
+**取引時にリアルタイムで更新される `pressure`**（§2.1〜2.2、`圧力 += k × (取引量/liquidity)`）
+の側だけ。
+
+したがって `liquidity_drain` は `base(n)` の式を一切変更しない。
+トレード処理（pressure 更新処理）側で、そのtickの `liquidity` を
+`currencies.liquidity × liquidityMul(currency, tick)` に差し替えるだけでよい
+（`liquidityMul` は `volMul` と同じ形の関数）。
+
+`pressure` はもともと時刻依存の逐次更新（§2.2 の漸化式）であり
+純粋関数ではない（セッション中だけ有効な状態）ため、ここに手を入れても
+§2.7 が守ろうとした「`base` の純粋関数性」への影響はない。
+
+#### events スキーマの整合性（再確認・結論）
+
+§8 の `events` テーブルは `price_ticks` 統一後のモデルに合わせて以下の点を変更する。
+
+| 変更前 | 変更後 | 理由 |
+|---|---|---|
+| `fire_at TIMESTAMPTZ` | `fire_tick BIGINT` | `base(n)` 計算・予兆判定のいずれも tick 番号ベースのため、実時刻からの都度変換が不要になる |
+| （列なし） | `duration_ticks INT NOT NULL DEFAULT 0` | `vol_up` / `liquidity_drain` の持続期間を表現するため。`shock` は 0（瞬間） |
+| `type` の値に `trend_flip` を含む | `shock` / `vol_up` / `liquidity_drain` の3種 | トレンド転換の廃止（本節冒頭）を反映 |
+| 制約なし | `UNIQUE (currency_id, fire_tick)` | 同一通貨・同一tickでの複数イベント発火を防ぐ（§5.1） |
+
+`magnitude` の意味は種別によって異なることを維持する（`shock`＝価格倍率オフセット、
+`vol_up`＝volatility倍率、`liquidity_drain`＝liquidity倍率）。列を分けず1列で持つのは
+元のドラフトと同じ判断（種別ごとに単位が違う列を並べるより、`type`で意味を切り替える
+方がスキーマがシンプルになるため）。
+
+`resolved` フラグの役割は変わる。**価格計算（`base(n)`）自体は `events` テーブルを
+都度参照するだけで済むため、`resolved` を見る必要がない。** `resolved` は
+「Discord への発火通知をもう投稿したか」という**通知の冪等性**のためだけに使う
+（CLAUDE.md §5.5）。`teased` も同様に「予兆メッセージをもう投稿したか」の冪等性用。
+
+具体的な `events` DDL は §8 に反映済み。
 
 ---
 
@@ -932,15 +1076,20 @@ CREATE TABLE game_sessions (          -- 1 日 1 行
     ticker_msg_id   TEXT                       -- 編集対象のティッカーメッセージ
 );
 
-CREATE TABLE events (
+CREATE TABLE events (          -- §5.4。price_ticks 統一後のtickベースモデルに整合
     id              BIGSERIAL   PRIMARY KEY,
     session_id      BIGINT      NOT NULL REFERENCES game_sessions(id),
     currency_id     BIGINT      NOT NULL REFERENCES currencies(id),
-    type            TEXT        NOT NULL,      -- spike/crash/vol_up/liquidity_drain/trend_flip
-    fire_at         TIMESTAMPTZ NOT NULL,
+    type            TEXT        NOT NULL,      -- shock / vol_up / liquidity_drain
+    fire_tick       BIGINT      NOT NULL,      -- 発火するセッション内tick番号（1〜60）
+    duration_ticks  INT         NOT NULL DEFAULT 0,  -- shockは0（瞬間）。vol_up/liquidity_drainは3〜5
     magnitude       NUMERIC(20,8) NOT NULL,
-    teased          BOOLEAN     NOT NULL DEFAULT FALSE,  -- 予兆を投稿済みか
-    resolved        BOOLEAN     NOT NULL DEFAULT FALSE   -- 二重発火防止
+    -- shock: 価格への乗数オフセット（例 +0.14 = +14%, -0.14 = -14%）
+    -- vol_up: volatility 倍率（例 3.0）
+    -- liquidity_drain: liquidity 倍率（例 0.30 = 平常の30%）
+    teased          BOOLEAN     NOT NULL DEFAULT FALSE,  -- 予兆メッセージ投稿済みか（通知の冪等性用）
+    resolved        BOOLEAN     NOT NULL DEFAULT FALSE,  -- 発火通知投稿済みか（通知の冪等性用）
+    UNIQUE (currency_id, fire_tick)
 );
 
 CREATE TABLE positions (
@@ -1240,4 +1389,4 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23、epicは #20）�
 - シーズンの長さ — #17（**当面決めない。MVPでは season_id 列だけ用意し、実装は保留**）
 - ~~Discord チャンネル構成（ティッカー用 / 通知用 / まとめ用）~~ — #18 **確定（→ §6.11）: #取引 / #ティッカー / #通知（まとめは#通知に統合）**
 - ~~寄り付き時の初期キャンドル生成方法~~ — #19 **確定（→ §2.8）。`price_candles`（§3, §8）は `price_ticks` に統一済み（→ §9.16）**
-- イベントシステムの数値パラメータ・tick純粋関数モデルとの統合方法（§5, §2.7〜2.9） — #23（新規）
+- ~~イベントシステムの数値パラメータ・tick純粋関数モデルとの統合方法~~ — #23 **確定（→ §5）**
