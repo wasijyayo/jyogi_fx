@@ -1,0 +1,61 @@
+openapi: 3.0.3
+info:
+  title: fxgame API
+  version: "0.1.0"
+  description: |
+    Discord連携型FXトレーディングゲームのAPI契約。
+    dev-guide.md のスキーマファースト方針に従い、実装より先にここへ定義する。
+    Discord の /interactions は Discord 側が定義したスキーマのためここには書かない。
+
+servers:
+  - url: /api
+
+paths:
+  /api/me:
+    get:
+      operationId: getMe
+      summary: ログイン中のユーザー情報を取得する
+      tags: [me]
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: 未ログイン（sessionCookieが無い・期限切れ）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+
+  schemas:
+    Me:
+      type: object
+      required:
+        - discordId
+        - displayName
+      properties:
+        discordId:
+          type: string
+          description: Discord ユーザーID。usersテーブルの主キー
+        displayName:
+          type: string
+
+    Error:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string

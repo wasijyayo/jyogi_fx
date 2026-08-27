@@ -22,6 +22,7 @@ func NewMux(cfg Config) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	registerAuthRoutes(mux, cfg)
+	registerAPIRoutes(mux, cfg)
 	return mux
 }
 
