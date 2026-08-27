@@ -3,6 +3,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 
 	"fxgame/backend/internal/game"
@@ -23,6 +24,15 @@ func NewMux(cfg Config) *http.ServeMux {
 	mux.HandleFunc("GET /health", handleHealth)
 	registerAuthRoutes(mux, cfg)
 	registerAPIRoutes(mux, cfg)
+
+	static, err := NewStaticHandler()
+	if err != nil {
+		// フロントエンド未ビルドでも /health 等は動かしたいので、ここでは落とさない。
+		log.Printf("static handler unavailable: %v", err)
+	} else {
+		mux.Handle("/", static)
+	}
+
 	return mux
 }
 

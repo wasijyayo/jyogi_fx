@@ -2,14 +2,22 @@
 .env
 
 # Go
-backend/web/
+# backend/web/ は Vite のビルド成果物（npm run build で生成、make gen 対象外）。
+# ディレクトリ自体は go:embed が要求するため .gitkeep で残す。
+backend/web/*
+!backend/web/.gitkeep
 *.exe
 *.test
+/bin/
 
 # Node
 node_modules/
 dist/
 frontend/dist/
+*.tsbuildinfo
+# tsc -b (composite project) が vite.config.ts の型チェック用に吐く出力。ソースは vite.config.ts のみ。
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # generated (regenerate via `make gen`)
 # ディレクトリ全体ではなくファイル単位で無視する。
