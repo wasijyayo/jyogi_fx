@@ -1,0 +1,9 @@
+# oapi-codegen 設定。api/openapi.yaml から Go サーバインタフェースを生成する。
+# 実行: oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml （リポジトリルートから）
+# 生成物は internal/apigen 配下（手編集禁止。sqlc の internal/db と同じ扱い）。
+package: apigen
+output: backend/internal/apigen/api.gen.go
+generate:
+  models: true
+  std-http-server: true
+  embedded-spec: false

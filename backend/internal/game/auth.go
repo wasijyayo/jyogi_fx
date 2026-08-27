@@ -6,15 +6,21 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fxgame/backend/internal/db"
 	"fxgame/backend/internal/discord"
 )
+
+// ErrSessionInvalid はセッションが存在しない・期限切れの場合に返る。
+// ハンドラ側はこれを 401 に変換する。
+var ErrSessionInvalid = errors.New("session invalid or expired")
 
 // sessionTTL は Cookie セッションの有効期限。
 // ゲーム内の「1日1時間」の取引セッション（game_sessions）とは別物。
@@ -27,6 +33,13 @@ type Session struct {
 	ID        string
 	UserID    string
 	ExpiresAt time.Time
+}
+
+// User はハンドラ層に返す最小限のユーザー情報。
+// server 層が internal/db に直接依存しないための境界（CLAUDE.md §3）。
+type User struct {
+	DiscordID   string
+	DisplayName string
 }
 
 // AuthService は Discord OAuth2 ログインとセッション発行を担当する。
@@ -101,6 +114,33 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 	}
 
 	return Session{ID: sessionID, UserID: du.ID, ExpiresAt: expiresAt}, nil
+}
+
+// CurrentUser は Cookie に入っているセッションIDからユーザーを引く。
+// GET /api/me など、ログイン必須のエンドポイントから呼ばれる。
+func (s *AuthService) CurrentUser(ctx context.Context, sessionID string) (User, error) {
+	q := db.New(s.pool)
+
+	session, err := q.GetSession(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrSessionInvalid
+		}
+		return User{}, fmt.Errorf("get session: %w", err)
+	}
+	if !session.ExpiresAt.Valid || s.clock.Now().After(session.ExpiresAt.Time) {
+		return User{}, ErrSessionInvalid
+	}
+
+	u, err := q.GetUserByID(ctx, session.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrSessionInvalid
+		}
+		return User{}, fmt.Errorf("get user: %w", err)
+	}
+
+	return User{DiscordID: u.DiscordID, DisplayName: u.DisplayName}, nil
 }
 
 func randomToken(n int) (string, error) {
