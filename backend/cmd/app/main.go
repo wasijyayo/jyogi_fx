@@ -3,11 +3,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fxgame/backend/internal/discord"
+	"fxgame/backend/internal/game"
 	"fxgame/backend/internal/server"
 )
 
@@ -31,7 +36,10 @@ func main() {
 func runServe() error {
 	// Cloud Run はリッスンポートを PORT で渡してくる規約。
 	// ローカルでは ADDR (":8080" 等) で上書きできるようにしておく。
+	// ADDR の有無を「ローカル開発かどうか」の判定にも流用し、Cookie の Secure 属性を切り替える
+	// （ローカルは http://localhost なので Secure Cookie がブラウザに保存されない）。
 	addr := os.Getenv("ADDR")
+	secureCookies := addr == ""
 	if addr == "" {
 		port := os.Getenv("PORT")
 		if port == "" {
@@ -40,7 +48,31 @@ func runServe() error {
 		addr = ":" + port
 	}
 
-	mux := server.NewMux()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("LOCAL_DATABASE_URL")
+	}
+	if dsn == "" {
+		return fmt.Errorf("DATABASE_URL (or LOCAL_DATABASE_URL) is not set")
+	}
+
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		return fmt.Errorf("connect to db: %w", err)
+	}
+	defer pool.Close()
+
+	oauth := discord.OAuthConfig{
+		ClientID:     os.Getenv("DISCORD_CLIENT_ID"),
+		ClientSecret: os.Getenv("DISCORD_CLIENT_SECRET"),
+		RedirectURI:  os.Getenv("DISCORD_REDIRECT_URI"),
+	}
+	authSvc := game.NewAuthService(pool, oauth, game.RealClock{})
+
+	mux := server.NewMux(server.Config{
+		Auth:          authSvc,
+		SecureCookies: secureCookies,
+	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
 }
