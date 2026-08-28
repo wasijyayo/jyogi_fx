@@ -64,11 +64,26 @@ GitHub Issue に対応する作業は **`main` に直接コミットせず、必
 **ここまでで認証・DB・API 生成・デプロイが全通しになる。**
 以降は `internal/game` に機能を足すだけになる。
 
+**→ Walking Skeleton は完了済み（#5〜#12 すべてクローズ）。**
+併せて Discord Bot の土台（`/interactions` + Ed25519 署名検証・#28）も本番稼働しており、
+Discord Developer Portal への Interactions Endpoint URL 登録も完了している。
+
 CI/CD の自動化は**手動デプロイが 1 回成功してから**。
 先に組むと失敗時の原因切り分けができない。
+→ 手動デプロイは成功済みだが、**CI（GitHub Actions）はまだ未構築**（`.github/` が無い）。
+§4 の内容を組むのが次の候補。
 
-進捗は GitHub Issues（#1〜#12、`infra-setup` / `walking-skeleton` ラベル、
-epic は #20）で追跡している。
+進捗は GitHub Issues で追跡している。
+
+| ラベル | 内容 |
+|---|---|
+| `walking-skeleton` | #5〜#12（完了） |
+| `infra-setup` | 外部サービス設定・デプロイ基盤 |
+| `discord-bot` | `/interactions`・スラッシュコマンド・通知 |
+| `schema` | DBスキーマ・マイグレーション |
+| `game-core` | 価格モデル・取引・イベント・経済 |
+| `web` | React SPA（チャート・注文フォーム） |
+| `design-decision` | 実装前に確定させる設計判断 |
 
 ---
 
@@ -88,12 +103,97 @@ make migrate-up
 make migrate-down
 make test
 
-# デプロイ（初回は手動）
-gcloud run deploy --source .
+# ビルド（フロントエンドを埋め込んだ単一バイナリ）
+make build
+
+# デプロイ（§2.1 参照）
+gcloud run deploy fxgame --source . --region asia-northeast1 \
+  --allow-unauthenticated --env-vars-file <環境変数ファイル>
 ```
 
 Go はローカルで `go run` する。**Docker の中で動かさない**（ホットリロードが効かなくなる）。
 Docker は「ローカル用 Postgres」と「本番用イメージのビルド」にのみ使う。
+
+`make` が未インストールの環境（Git Bash 等）では中身のコマンドを直接叩く。
+
+---
+
+## 2.1 デプロイ（Cloud Run）
+
+### 本番環境
+
+| 項目 | 値 |
+|---|---|
+| URL | `https://fxgame-1046232958174.asia-northeast1.run.app` |
+| GCP プロジェクト | `jyogi-fx` |
+| サービス名 / リージョン | `fxgame` / `asia-northeast1` |
+| DB | Neon（`DATABASE_URL`） |
+
+**Discord Developer Portal に登録済みの URL:**
+
+- Interactions Endpoint URL: `<本番URL>/interactions`
+- OAuth2 Redirects: `<本番URL>/auth/discord/callback` と `http://localhost:8080/auth/discord/callback`
+
+ローカルで別ポートを使う場合、そのポートの callback URL も Redirects に追加しないと
+`OAuth2 redirect_uri が無効です` になる。
+
+### 手順
+
+環境変数は YAML ファイルにまとめて渡す（コマンド履歴にシークレットを残さないため）。
+**このファイルはリポジトリ外（一時ディレクトリ）に置き、使用後は削除すること。**
+
+```yaml
+# 例: /tmp/cloudrun-env.yaml
+DATABASE_URL: postgres://...
+DISCORD_CLIENT_ID: "..."      # 数値だが文字列として渡す（クォート必須）
+DISCORD_CLIENT_SECRET: ...
+DISCORD_PUBLIC_KEY: ...
+DISCORD_BOT_TOKEN: ...
+DISCORD_REDIRECT_URI: https://<本番URL>/auth/discord/callback
+```
+
+```bash
+gcloud run deploy fxgame --source . --region asia-northeast1 \
+  --allow-unauthenticated --env-vars-file /tmp/cloudrun-env.yaml
+```
+
+### ハマりどころ
+
+**`.gcloudignore` を消してはいけない。**
+`gcloud` はこのファイルが無いと `.gitignore` を流用する。生成コード
+（`backend/internal/apigen`・`internal/db` の sqlc 生成物）は `.gitignore` 対象なので、
+アップロードされずに
+`package fxgame/backend/internal/apigen is not in std` でビルドが失敗する。
+
+現状は**ローカルの生成物をそのまま送っている**ため、デプロイ前に `make gen` を実行すること。
+（本来は Dockerfile 内で生成するのが正しい。frontend は `npm run gen` で実施済み。
+sqlc / oapi-codegen の導入とセットで移行したい。）
+
+**Go のバージョンは `Dockerfile` と `go.mod` を揃える。**
+ずれるとビルドが失敗する。
+
+### デプロイ後の確認
+
+```
+/health                  -> 200 ok
+/                        -> 200（SPAのindex.html。埋め込みが効いているか）
+/assets/index-*.js       -> 200（フロントエンドのバンドル）
+/api/me（Cookieなし）    -> 401
+/interactions（偽署名）  -> 401  ← Discordの登録時チェックが要求する挙動
+GET /interactions        -> 405
+```
+
+`/interactions` が **500** を返す場合は `DISCORD_PUBLIC_KEY` の設定漏れ
+（401 は正常な署名拒否なので、両者は意図的に区別してある）。
+
+### ビルドログの確認
+
+```bash
+gcloud builds list --limit 3 --region=asia-northeast1
+gcloud builds log <BUILD_ID> --region=asia-northeast1
+```
+
+`--region` を付けないと「ビルドが見つからない」となるので注意。
 
 ---
 
