@@ -51,7 +51,16 @@ const maxInteractionBody = 256 << 10 // 256KiB
 const interactionMaxSkew = 5 * time.Minute
 
 type interactionRequest struct {
-	Type interactionType `json:"type"`
+	Type interactionType         `json:"type"`
+	Data *interactionCommandData `json:"data,omitempty"`
+}
+
+// interactionCommandData はスラッシュコマンド実行時に Discord が送ってくる data。
+// Name は internal/discord.Commands の CommandXxx 定数と同じ値になる
+// （#29: コマンド定義は internal/discord に 1 箇所にまとめ、名前をここで対応づける）。
+// 実際のコマンドごとの分岐・処理は #41 / #42 で実装する。
+type interactionCommandData struct {
+	Name string `json:"name"`
 }
 
 type interactionResponse struct {
@@ -136,12 +145,16 @@ func handleInteractions(cfg Config) http.HandlerFunc {
 		case interactionPing:
 			writeJSON(w, http.StatusOK, interactionResponse{Type: callbackPong})
 		default:
-			// スラッシュコマンド等は後続 issue（#29, #41, #42）で実装する。
+			// スラッシュコマンドの実際の処理は後続 issue（#41, #42）で実装する。
 			// **ここで callbackPong を返してはいけない。** PONG は PING 専用の
 			// callback type なので、Discord に拒否され利用者には
 			// 「インタラクションに失敗しました」と表示される。
 			// 実装が済むまでは本人にだけ見えるメッセージで未実装を伝える。
-			log.Printf("discord interaction: unhandled type %d", req.Type)
+			commandName := ""
+			if req.Data != nil {
+				commandName = req.Data.Name
+			}
+			log.Printf("discord interaction: unhandled type %d (command=%q)", req.Type, commandName)
 			writeJSON(w, http.StatusOK, interactionResponse{
 				Type: callbackChannelMessage,
 				Data: &interactionResponseData{

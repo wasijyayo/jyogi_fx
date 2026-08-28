@@ -1,12 +1,15 @@
 package server_test
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -110,6 +113,26 @@ func TestInteractions(t *testing.T) {
 			if got.Data.Flags != 1<<6 {
 				t.Errorf("type %d: flags = %d, want %d (ephemeral)", interactionType, got.Data.Flags, 1<<6)
 			}
+		}
+	})
+
+	// #29: スラッシュコマンド名は internal/discord.Commands の定義と対応づけられるよう、
+	// data.name をログに残す（実際の実行分岐は #41 / #42）。
+	t.Run("スラッシュコマンドのdata.nameをログに残す", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		log.SetOutput(&logBuf)
+		t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+		body := `{"type":2,"data":{"name":"balance"}}`
+		req := newSignedRequest(t, priv, testTimestamp, body)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if !strings.Contains(logBuf.String(), `command="balance"`) {
+			t.Errorf("log = %q, want it to contain command=%q", logBuf.String(), "balance")
 		}
 	})
 
