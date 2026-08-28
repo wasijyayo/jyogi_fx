@@ -18,13 +18,17 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: app <serve>")
+		fmt.Fprintln(os.Stderr, "usage: app <serve|register-commands>")
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
 	case "serve":
 		if err := runServe(); err != nil {
+			log.Fatal(err)
+		}
+	case "register-commands":
+		if err := runRegisterCommands(); err != nil {
 			log.Fatal(err)
 		}
 	default:
@@ -85,4 +89,41 @@ func runServe() error {
 	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+// runRegisterCommands は Discord にスラッシュコマンド定義を登録する（#29）。
+//
+// コードを書くだけではコマンドは Discord のチャット欄に表示されない。
+// このサブコマンドを手動で実行して初めて反映される。
+//
+// DISCORD_GUILD_ID を設定するとギルド限定登録になり、即座に反映される（開発向け）。
+// 未設定ならグローバル登録になり、反映まで最大1時間かかる（本番向け）。
+func runRegisterCommands() error {
+	botToken := os.Getenv("DISCORD_BOT_TOKEN")
+	if botToken == "" {
+		return fmt.Errorf("DISCORD_BOT_TOKEN is not set")
+	}
+
+	appID := os.Getenv("DISCORD_CLIENT_ID")
+	if appID == "" {
+		return fmt.Errorf("DISCORD_CLIENT_ID is not set")
+	}
+
+	guildID := os.Getenv("DISCORD_GUILD_ID")
+
+	cfg := discord.RegisterCommandsConfig{
+		BotToken:      botToken,
+		ApplicationID: appID,
+		GuildID:       guildID,
+	}
+	if err := discord.RegisterCommands(context.Background(), cfg, discord.Commands); err != nil {
+		return fmt.Errorf("register commands: %w", err)
+	}
+
+	scope := "global（反映まで最大1時間）"
+	if guildID != "" {
+		scope = "guild " + guildID + "（即時反映）"
+	}
+	log.Printf("registered %d commands (%s)", len(discord.Commands), scope)
+	return nil
 }
