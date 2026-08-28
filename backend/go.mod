@@ -2,7 +2,10 @@ module fxgame/backend
 
 go 1.25.0
 
-require github.com/jackc/pgx/v5 v5.10.0
+require (
+	github.com/jackc/pgx/v5 v5.10.0
+	github.com/shopspring/decimal v1.4.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

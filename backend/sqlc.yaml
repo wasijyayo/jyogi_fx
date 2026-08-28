@@ -13,5 +13,13 @@ sql:
         overrides:
           # CLAUDE.md §5.2: 金額・価格・数量に float を使わない。
           # NUMERIC は必ず decimal.Decimal にマップする。
-          - db_type: "numeric"
+          # db_type は Postgres の内蔵型なので "pg_catalog." 修飾が必須
+          # （修飾なしの "numeric" ではマッチせず、pgtype.Numeric のままになる。
+          #  #30 でNUMERIC列を初めて追加した際に判明した）。
+          - db_type: "pg_catalog.numeric"
             go_type: "github.com/shopspring/decimal.Decimal"
+          # NULL許容のNUMERIC列（例: positions.pnl。決済前はNULL）用。
+          # decimal.Decimal のゼロ値とDBのNULLを区別する必要があるため NullDecimal を使う。
+          - db_type: "pg_catalog.numeric"
+            nullable: true
+            go_type: "github.com/shopspring/decimal.NullDecimal"
