@@ -31,7 +31,12 @@ func TestGetMe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pgxpool.New: %v", err)
 	}
-	defer pool.Close()
+	// defer ではなく t.Cleanup で閉じる。t.Cleanup は登録順と逆順（LIFO）に実行されるため、
+	// ここで先に登録しておくことで、後から登録する削除処理（t.Cleanup）より必ず後に
+	// pool.Close() が走る。defer だとテスト関数が return した時点で即座に閉じてしまい、
+	// 後続の t.Cleanup での削除が「閉じた後の pool」に対する実行になって静かに失敗し、
+	// テストデータが（本番Neonに向けた場合は本番に）残り続けるバグになる。
+	t.Cleanup(func() { pool.Close() })
 
 	if err := pool.Ping(ctx); err != nil {
 		t.Skipf("ローカル Postgres に接続できないためスキップ（docker compose up -d を実行してください）: %v", err)
