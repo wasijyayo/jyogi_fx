@@ -3,6 +3,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"log"
 	"net/http"
 
@@ -16,6 +17,10 @@ type Config struct {
 	// SecureCookies が true のとき Cookie に Secure 属性を付ける。
 	// Cloud Run（本番）では true、ローカル開発（http://localhost）では false にする。
 	SecureCookies bool
+
+	// DiscordPublicKey は /interactions の Ed25519 署名検証に使う公開鍵。
+	// 未設定の場合、署名検証は常に失敗する（＝すべて 401）。
+	DiscordPublicKey ed25519.PublicKey
 }
 
 // NewMux は HTTP ルーティングを組み立てる。
@@ -24,6 +29,7 @@ func NewMux(cfg Config) *http.ServeMux {
 	mux.HandleFunc("GET /health", handleHealth)
 	registerAuthRoutes(mux, cfg)
 	registerAPIRoutes(mux, cfg)
+	registerDiscordRoutes(mux, cfg)
 
 	static, err := NewStaticHandler()
 	if err != nil {
