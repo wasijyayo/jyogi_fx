@@ -69,9 +69,19 @@ func runServe() error {
 	}
 	authSvc := game.NewAuthService(pool, oauth, game.RealClock{})
 
+	// Discord の署名検証用公開鍵。
+	// 設定漏れに起動時点で気づけるよう、未設定・不正のどちらも起動失敗にする。
+	// リクエスト時に初めて分かる形にすると、/health は 200 のままデプロイが成功したように
+	// 見えてしまい、Bot だけが静かに死んでいる状態を見逃す。
+	discordPublicKey, err := server.ParseDiscordPublicKey(os.Getenv("DISCORD_PUBLIC_KEY"))
+	if err != nil {
+		return fmt.Errorf("DISCORD_PUBLIC_KEY: %w", err)
+	}
+
 	mux := server.NewMux(server.Config{
-		Auth:          authSvc,
-		SecureCookies: secureCookies,
+		Auth:             authSvc,
+		SecureCookies:    secureCookies,
+		DiscordPublicKey: discordPublicKey,
 	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
