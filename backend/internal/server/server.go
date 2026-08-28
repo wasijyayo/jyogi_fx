@@ -19,12 +19,20 @@ type Config struct {
 	SecureCookies bool
 
 	// DiscordPublicKey は /interactions の Ed25519 署名検証に使う公開鍵。
-	// 未設定の場合、署名検証は常に失敗する（＝すべて 401）。
+	// 未設定の場合、/interactions は 500 を返す（設定ミスと署名偽造を区別するため）。
 	DiscordPublicKey ed25519.PublicKey
+
+	// Clock は署名タイムスタンプの鮮度検査に使う（CLAUDE.md §5.1: 時刻は必ず注入する）。
+	// 未設定なら RealClock を使う。
+	Clock game.Clock
 }
 
 // NewMux は HTTP ルーティングを組み立てる。
 func NewMux(cfg Config) *http.ServeMux {
+	if cfg.Clock == nil {
+		cfg.Clock = game.RealClock{}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
 	registerAuthRoutes(mux, cfg)

@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"log"
 	"net/http"
@@ -70,17 +69,13 @@ func runServe() error {
 	}
 	authSvc := game.NewAuthService(pool, oauth, game.RealClock{})
 
-	// Discord の署名検証用公開鍵。設定ミスに起動時点で気づけるよう、ここで検証しておく
-	// （不正な長さのまま ed25519.Verify を呼ぶとリクエストのたびに panic するため）。
-	// 未設定でも /health や Web API は動かしたいので、警告に留めて起動は続ける。
-	var discordPublicKey ed25519.PublicKey
-	if raw := os.Getenv("DISCORD_PUBLIC_KEY"); raw != "" {
-		discordPublicKey, err = server.ParseDiscordPublicKey(raw)
-		if err != nil {
-			return fmt.Errorf("invalid DISCORD_PUBLIC_KEY: %w", err)
-		}
-	} else {
-		log.Print("DISCORD_PUBLIC_KEY is not set; /interactions will reject all requests")
+	// Discord の署名検証用公開鍵。
+	// 設定漏れに起動時点で気づけるよう、未設定・不正のどちらも起動失敗にする。
+	// リクエスト時に初めて分かる形にすると、/health は 200 のままデプロイが成功したように
+	// 見えてしまい、Bot だけが静かに死んでいる状態を見逃す。
+	discordPublicKey, err := server.ParseDiscordPublicKey(os.Getenv("DISCORD_PUBLIC_KEY"))
+	if err != nil {
+		return fmt.Errorf("DISCORD_PUBLIC_KEY: %w", err)
 	}
 
 	mux := server.NewMux(server.Config{
