@@ -116,6 +116,31 @@ Docker は「ローカル用 Postgres」と「本番用イメージのビルド�
 
 `make` が未インストールの環境（Git Bash 等）では中身のコマンドを直接叩く。
 
+### スラッシュコマンドの登録（#29）
+
+コードを書いてデプロイするだけでは Discord のチャット欄に `/` コマンドは表示されない。
+`register-commands` サブコマンドを**手動で実行**して初めて反映される
+（コマンド定義自体は `backend/internal/discord/commands.go` に一箇所にまとめてある）。
+
+```bash
+# 開発中: ギルド限定登録（即時反映）
+DISCORD_BOT_TOKEN=... DISCORD_CLIENT_ID=... DISCORD_GUILD_ID=<開発用サーバーのID> \
+  go run ./backend/cmd/app register-commands
+
+# 本番: グローバル登録（反映まで最大1時間）。DISCORD_GUILD_ID は付けない
+DISCORD_BOT_TOKEN=... DISCORD_CLIENT_ID=... \
+  go run ./backend/cmd/app register-commands
+```
+
+コマンドの追加・削除・説明文の変更をしたら、その都度この登録をやり直す
+（PUT は差分登録ではなく丸ごと上書きなので、一覧を変えれば都度反映される）。
+
+| 環境変数 | 用途 |
+|---|---|
+| `DISCORD_BOT_TOKEN` | Bot トークン（Authorization ヘッダに使う） |
+| `DISCORD_CLIENT_ID` | Application ID（`/interactions` の Discord OAuth と共通） |
+| `DISCORD_GUILD_ID` | 開発用サーバーのID。**設定するとギルド限定登録**（即時反映）。本番のグローバル登録では未設定にする |
+
 ---
 
 ## 2.1 デプロイ（Cloud Run）
