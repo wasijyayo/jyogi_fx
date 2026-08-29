@@ -116,15 +116,14 @@ func TestInteractions(t *testing.T) {
 		}
 	})
 
-	// #29: スラッシュコマンド名は internal/discord.Commands の定義と対応づけられるよう、
-	// 未実装コマンドの data.name をログに残す。/balance 等（#41）は実装済みになったため、
-	// ここではまだ未実装の /price（#42想定）を使う。
+	// #29: 未対応のコマンド名（MVPコマンド全て実装済みの#42時点では、Discord側の
+	// 登録漏れ・設定ミス等で理論上しか届かないはずの名前）が来てもログに残ること。
 	t.Run("未実装コマンドのdata.nameをログに残す", func(t *testing.T) {
 		var logBuf bytes.Buffer
 		log.SetOutput(&logBuf)
 		t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-		body := `{"type":2,"data":{"name":"price"}}`
+		body := `{"type":2,"data":{"name":"not-a-real-command"}}`
 		req := newSignedRequest(t, priv, testTimestamp, body)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -132,8 +131,8 @@ func TestInteractions(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 		}
-		if !strings.Contains(logBuf.String(), `command="price"`) {
-			t.Errorf("log = %q, want it to contain command=%q", logBuf.String(), "price")
+		if !strings.Contains(logBuf.String(), `command="not-a-real-command"`) {
+			t.Errorf("log = %q, want it to contain command=%q", logBuf.String(), "not-a-real-command")
 		}
 	})
 

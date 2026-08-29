@@ -35,8 +35,19 @@ type interactionCallbackType int
 const (
 	callbackPong               interactionCallbackType = 1 // PING への応答専用
 	callbackChannelMessage     interactionCallbackType = 4 // メッセージを返す
-	callbackDeferredChannelMsg interactionCallbackType = 5 // 「考え中…」（3秒制限の回避用・#42）
+	callbackDeferredChannelMsg interactionCallbackType = 5 // 「考え中…」（3秒制限の回避用。#42では未使用。discord.goのhandleInteractionsコメント参照）
+	callbackModal              interactionCallbackType = 9 // モーダルを開く（#42: /priceの買う/売るボタン→数量入力）
 )
+
+// Discordのボタンスタイル（#42）。
+const (
+	buttonStyleSecondary = 2 // 灰色。中立的な操作（キャンセル等）
+	buttonStyleSuccess   = 3 // 緑。買い・確定などポジティブな操作
+	buttonStyleDanger    = 4 // 赤。売り・決済などの破壊的操作
+)
+
+// Discordのテキスト入力スタイル（モーダル用。#42）。
+const textInputStyleShort = 1 // 1行入力
 
 // messageFlagEphemeral は「本人にだけ見えるメッセージ」を表す Discord のフラグ。
 const messageFlagEphemeral = 1 << 6
@@ -70,13 +81,51 @@ type interactionUser struct {
 	ID string `json:"id"`
 }
 
-// interactionCommandData はスラッシュコマンド実行時に Discord が送ってくる data。
-// Name は internal/discord.Commands の CommandXxx 定数と同じ値になる
-// （#29: コマンド定義は internal/discord に 1 箇所にまとめ、名前をここで対応づける）。
-// 実際のコマンドごとの分岐・処理は commands.go（#41 / #42）で実装する。
+// interactionCommandData はスラッシュコマンド・ボタン・モーダル送信のいずれでも
+// Discordが送ってくる data。Interactionの種類によって埋まるフィールドが異なる
+// （スラッシュコマンド: Name/Options。ボタン: CustomID。モーダル送信:
+// CustomID/Components）。実際のコマンドごとの分岐・処理は commands.go（#41 / #42）
+// で実装する。
 type interactionCommandData struct {
-	Name    string                     `json:"name"`
+	// Name は internal/discord.Commands の CommandXxx 定数と同じ値になる
+	// （#29: コマンド定義は internal/discord に 1 箇所にまとめ、名前をここで対応づける）。
+	Name    string                     `json:"name,omitempty"`
 	Options []interactionCommandOption `json:"options,omitempty"`
+
+	// CustomID はボタン押下・モーダル送信時にこちらが指定した識別子がそのまま
+	// 返ってくる（#42）。「操作の種類:パラメータ」の形式で自前にエンコードする
+	// （例 "close:123"・"order:long:JOG"）。commands.goのcustomID関連ヘルパー参照。
+	CustomID string `json:"custom_id,omitempty"`
+
+	// Components はモーダル送信時、各テキスト入力の値がAction Row経由で入れ子で
+	// 返ってくる（#42）。interactionModalValue で custom_id をキーに引く。
+	Components []interactionComponentRow `json:"components,omitempty"`
+}
+
+// interactionComponentRow はモーダル送信データの1 Action Row 分。
+type interactionComponentRow struct {
+	Components []interactionComponentValue `json:"components"`
+}
+
+// interactionComponentValue はモーダルのテキスト入力1つの送信値。
+type interactionComponentValue struct {
+	CustomID string `json:"custom_id"`
+	Value    string `json:"value"`
+}
+
+// interactionModalValue はモーダル送信データから custom_id を指定して入力値を取り出す。
+func interactionModalValue(data *interactionCommandData, customID string) (string, bool) {
+	if data == nil {
+		return "", false
+	}
+	for _, row := range data.Components {
+		for _, v := range row.Components {
+			if v.CustomID == customID {
+				return v.Value, true
+			}
+		}
+	}
+	return "", false
 }
 
 // interactionCommandOption はスラッシュコマンドの引数1つ分。
@@ -94,9 +143,64 @@ type interactionResponse struct {
 }
 
 type interactionResponseData struct {
-	Content string         `json:"content,omitempty"`
-	Embeds  []discordEmbed `json:"embeds,omitempty"`
-	Flags   int            `json:"flags,omitempty"`
+	Content    string              `json:"content,omitempty"`
+	Embeds     []discordEmbed      `json:"embeds,omitempty"`
+	Components []discordActionRow  `json:"components,omitempty"`
+	Flags      int                 `json:"flags,omitempty"`
+}
+
+// discordActionRow はボタンを並べる行（type:1。#42）。Discordの仕様上、
+// ボタンは必ずAction Rowに入れ子にする必要があり、直接componentsには置けない。
+type discordActionRow struct {
+	Type       int             `json:"type"` // 1固定
+	Components []discordButton `json:"components"`
+}
+
+// discordButton はDiscordのボタンコンポーネント（type:2。#42）。
+type discordButton struct {
+	Type     int    `json:"type"` // 2固定
+	Style    int    `json:"style"`
+	Label    string `json:"label"`
+	CustomID string `json:"custom_id"`
+}
+
+// newActionRow は1つのボタンだけを持つAction Rowを作る簡易ヘルパー。
+// #42で必要になるボタンは常に「1行1ボタン」（決済ボタン等）のため、
+// 呼び出し側で毎回Action Rowの入れ子を書かなくて済むようにする。
+func newActionRow(buttons ...discordButton) discordActionRow {
+	return discordActionRow{Type: 1, Components: buttons}
+}
+
+// interactionModalResponse はモーダルを開く応答（callback type:9。#42）。
+// interactionResponse（type:4等）とは data の形が異なるため別の型にする。
+type interactionModalResponse struct {
+	Type interactionCallbackType `json:"type"`
+	Data *interactionModalData   `json:"data"`
+}
+
+type interactionModalData struct {
+	CustomID   string                `json:"custom_id"`
+	Title      string                `json:"title"`
+	Components []discordTextInputRow `json:"components"`
+}
+
+type discordTextInputRow struct {
+	Type       int                `json:"type"` // 1固定
+	Components []discordTextInput `json:"components"`
+}
+
+// discordTextInput はモーダルのテキスト入力コンポーネント（type:4。#42）。
+type discordTextInput struct {
+	Type        int    `json:"type"` // 4固定
+	CustomID    string `json:"custom_id"`
+	Label       string `json:"label"`
+	Style       int    `json:"style"`
+	Required    bool   `json:"required"`
+	Placeholder string `json:"placeholder,omitempty"`
+}
+
+func newTextInputRow(input discordTextInput) discordTextInputRow {
+	return discordTextInputRow{Type: 1, Components: []discordTextInput{input}}
 }
 
 // discordEmbed はDiscordのEmbedオブジェクトのうち、MVPコマンド（#41/#42）で
@@ -199,10 +303,26 @@ func handleInteractions(cfg Config) http.HandlerFunc {
 		case interactionPing:
 			writeJSON(w, http.StatusOK, interactionResponse{Type: callbackPong})
 		case interactionApplicationCommand:
-			// design.md §6.2「3秒以内に応答が必要」。/balance /rank /today /profile は
-			// 20人規模の集計で軽いため、deferred応答（type:5）は使わず直接返す
-			// （§6.2「20人規模の集計なら通常は直接返して問題ない」）。
+			// design.md §6.2「3秒以内に応答が必要」。#41/#42のコマンドはいずれも
+			// 20人規模の集計・単発のDB更新で軽いため、deferred応答（type:5）は
+			// 使わず直接返す（§6.2「20人規模の集計なら通常は直接返して問題ない」）。
+			// deferred応答はCloud Run上で「初回応答を返した後、非同期で後続処理を
+			// 続けてfollowup webhookを叩く」構成が必要になり、scale-to-zero
+			// （CLAUDE.md冒頭）と相性が悪い（応答直後にインスタンスが縮退しうる）
+			// ため、#42では採用を見送った。
 			data := handleSlashCommand(r.Context(), cfg, req, cfg.Clock.Now())
+			writeJSON(w, http.StatusOK, interactionResponse{
+				Type: callbackChannelMessage,
+				Data: &data,
+			})
+		case interactionMessageComponent:
+			// ボタン押下（#42: /priceの買う/売る、/positionsの決済・確認）。
+			// custom_idのプレフィックスに応じて通常メッセージかモーダルかが変わるため
+			// handleMessageComponentがレスポンス全体（any）を組み立てる。
+			writeJSON(w, http.StatusOK, handleMessageComponent(r.Context(), cfg, req, cfg.Clock.Now()))
+		case interactionModalSubmit:
+			// モーダル送信（#42: /priceのボタン→開いた数量入力モーダルの送信）。
+			data := handleModalSubmit(r.Context(), cfg, req, cfg.Clock.Now())
 			writeJSON(w, http.StatusOK, interactionResponse{
 				Type: callbackChannelMessage,
 				Data: &data,

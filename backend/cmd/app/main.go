@@ -119,12 +119,16 @@ func runServe() error {
 
 	rankingSvc := game.NewRankingService(pool, game.RealClock{})
 	profileSvc := game.NewProfileService(pool, game.RealClock{}, rankingSvc)
+	quoteSvc := game.NewQuoteService(pool, game.RealClock{})
 
 	mux := server.NewMux(server.Config{
 		Auth:             authSvc,
 		Tick:             tickSvc,
 		Ranking:          rankingSvc,
 		Profile:          profileSvc,
+		Quote:            quoteSvc,
+		Trade:            tradeSvc,
+		Claim:            claimSvc,
 		SecureCookies:    secureCookies,
 		DiscordPublicKey: discordPublicKey,
 		TickSharedSecret: tickSharedSecret,

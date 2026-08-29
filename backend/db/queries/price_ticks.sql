@@ -22,3 +22,12 @@ SELECT * FROM price_ticks
 WHERE currency_id = $1
 ORDER BY tick_index DESC
 LIMIT 1;
+
+-- name: ListRecentPriceTicks :many
+-- /price（#42 CMD-2）のスパークライン用に直近Ntick分のcloseを取得する
+-- （design.md §6.4「直近8本のキャンドルのcloseを8段階に写像する」）。
+-- tick_index降順で返すため、呼び出し側で時系列順に並べ替えること。
+SELECT * FROM price_ticks
+WHERE currency_id = $1
+ORDER BY tick_index DESC
+LIMIT $2;

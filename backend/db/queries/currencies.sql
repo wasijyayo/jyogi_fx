@@ -5,6 +5,12 @@
 SELECT * FROM currencies
 ORDER BY id;
 
+-- name: GetCurrencyBySymbol :one
+-- /price（#42 CMD-2）用の読み取り専用取得。ロックを取らない
+-- （表示するだけで書き換えないため、GetCurrencyBySymbolForUpdateを使い回さない）。
+SELECT * FROM currencies
+WHERE symbol = $1;
+
 -- name: GetCurrencyBySymbolForUpdate :one
 -- 取引処理でpressureを読み書きする前に行ロックを取る（同時注文によるpressure更新の
 -- lost update を防ぐ。#36 TRADE-1）。呼び出し側は必ずトランザクション内で使うこと。
