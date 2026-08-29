@@ -124,7 +124,7 @@ func TestCurrentPrice_大量購入で価格が跳ねてその後半減期どお�
 	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	c := pressureCurrency("0.1386294361", "0.01", "10000", "0", t0) // JOG相当（半減期5分）
 
-	before := CurrentPrice(c, 0, t0)
+	before := CurrentPrice(c, 0, t0, nil)
 	if !before.Equal(c.BasePrice) {
 		t.Fatalf("取引前の価格 = %s, want %s（圧力0のはず）", before, c.BasePrice)
 	}
@@ -136,7 +136,7 @@ func TestCurrentPrice_大量購入で価格が跳ねてその後半減期どお�
 	c.Pressure = newPressure
 	c.PressureAt = pgtype.Timestamptz{Time: t0, Valid: true}
 
-	spiked := CurrentPrice(c, 0, t0)
+	spiked := CurrentPrice(c, 0, t0, nil)
 	if !spiked.GreaterThan(before) {
 		t.Fatalf("大量購入後の価格 %s が購入前 %s 以下だった（跳ねていない）", spiked, before)
 	}
@@ -146,7 +146,7 @@ func TestCurrentPrice_大量購入で価格が跳ねてその後半減期どお�
 	}
 
 	// 半減期(5分)ちょうど後: 圧力が半分になり、価格もその分だけ戻っているはず。
-	afterHalfLife := CurrentPrice(c, 0, t0.Add(5*time.Minute))
+	afterHalfLife := CurrentPrice(c, 0, t0.Add(5*time.Minute), nil)
 	wantAfter := c.BasePrice.Mul(decimal.NewFromInt(1).Add(newPressure.Div(decimal.NewFromInt(2))))
 	if diff := afterHalfLife.Sub(wantAfter).Abs(); diff.GreaterThan(decimal.NewFromFloat(0.0001)) {
 		t.Errorf("半減期後の価格 = %s, want ≈ %s（圧力が半分に戻っていない）", afterHalfLife, wantAfter)

@@ -33,14 +33,20 @@ func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, li
 
 // Tick は毎分呼ばれる処理の入口（design.md §4「毎分tickが担当する処理」）。
 //
-//	1. イベントの予兆投稿 / 発火判定   → TODO(#40 EVENT-1)
+//	1. イベントの予兆投稿 / 発火通知   → TODO(#44 NOTIFY-2)
 //	2. 指値・逆指値の約定判定          → TODO(#36/#37 TRADE-1/2)
-//	3. ロスカット判定                  → このIssue(#38)で実装
-//	4. price_ticks 書き込み            → #35で実装
+//	3. ロスカット判定                  → #38で実装
+//	4. price_ticks 書き込み            → #35で実装。#40でイベント（shock/vol_up）の
+//	                                     価格反映もここに含めた（writePriceTickが
+//	                                     ListEventsByCurrencyを引いてBasePriceに渡す）
 //	5. 市場ティッカーメッセージの編集  → TODO(#43 NOTIFY-1)
 //
-// 該当する機能（イベント・指値注文）がまだ実装されていないため、1・2・5 は
-// 手順の位置だけを TODO コメントとして残し、3・4 を実装する。
+// 手順1は「価格への反映」と「Discordへの通知」の2つに分かれており（design.md §5.4）、
+// 前者は手順4に含めて#40で実装済み。後者（予兆・発火のDiscord投稿。teased/resolved
+// フラグの更新）はteased/resolvedが価格計算では見ない冪等性専用フラグであるため
+// 別issue（#44）に切り出してある。該当する機能（Discord通知・指値注文）が
+// まだ実装されていないため、1（通知のみ）・2・5 は手順の位置だけを TODO
+// コメントとして残し、3・4 を実装する。
 //
 // セッション外は何もしない（design.md §9.10/§9.12: 常時起動しない構成のため、
 // セッション外のtickは保存せず base(n) の再計算で賄う）。ロスカット判定
@@ -156,7 +162,11 @@ func writePriceTick(ctx context.Context, q *db.Queries, session db.GameSession, 
 	// base_price 列にも base(n) 自体を保存する必要があるため、ここでは
 	// CurrentPrice を呼ばず BasePrice の結果を使い回す
 	// （BasePrice は経過tick数に比例した計算量があるため二重に呼ばない。pricing.go）。
-	base := BasePrice(c, tickIndex)
+	events, err := q.ListEventsByCurrency(ctx, c.ID)
+	if err != nil {
+		return fmt.Errorf("list events for %s: %w", c.Symbol, err)
+	}
+	base := BasePrice(c, tickIndex, events)
 	pressure := Pressure(c, now)
 	price := base.Mul(decimal.NewFromInt(1).Add(pressure))
 

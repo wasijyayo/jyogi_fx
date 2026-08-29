@@ -63,8 +63,10 @@ func UpdatePressure(c db.Currency, now time.Time, signedVolume, liquidity decima
 // tickIndex は BasePrice（乱数由来の長期トレンド）用、now は Pressure（取引による
 // 一時的な歪み）の減衰計算用。呼び出し側で両者の時刻を整合させること
 // （通常は同じ time.Time から算出した tickIndex と now を渡す）。
-func CurrentPrice(c db.Currency, tickIndex int64, now time.Time) decimal.Decimal {
-	base := BasePrice(c, tickIndex)
+// events は BasePrice にそのまま渡す（c.ID に絞り込み済みのものを渡すこと。
+// pricing.go の BasePrice コメント参照。#40 EVENT-1）。
+func CurrentPrice(c db.Currency, tickIndex int64, now time.Time, events []db.Event) decimal.Decimal {
+	base := BasePrice(c, tickIndex, events)
 	pressure := Pressure(c, now)
 	return base.Mul(decimal.NewFromInt(1).Add(pressure))
 }

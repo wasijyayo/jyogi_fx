@@ -111,7 +111,7 @@ func TestBasePrice_tick0は基準価格そのまま(t *testing.T) {
 	c := testCurrency(1001, "0.0008", "0.05")
 
 	for _, tick := range []int64{0, -1} {
-		got := BasePrice(c, tick)
+		got := BasePrice(c, tick, nil)
 		if !got.Equal(c.BasePrice) {
 			t.Errorf("BasePrice(tick=%d) = %s, want %s", tick, got, c.BasePrice)
 		}
@@ -123,8 +123,8 @@ func TestBasePrice_同じ入力なら同じ値(t *testing.T) {
 	c := testCurrency(1001, "0.0008", "0.05")
 
 	for _, tick := range []int64{1, 100, 1440, 100000} {
-		a := BasePrice(c, tick)
-		b := BasePrice(c, tick)
+		a := BasePrice(c, tick, nil)
+		b := BasePrice(c, tick, nil)
 		if !a.Equal(b) {
 			t.Errorf("BasePrice(tick=%d) = %s, %s: 同じ入力で異なる値が返った", tick, a, b)
 		}
@@ -137,11 +137,11 @@ func TestBasePrice_同じ入力なら同じ値(t *testing.T) {
 func TestBasePrice_呼び出し順序に依存しない(t *testing.T) {
 	c := testCurrency(1001, "0.0008", "0.05")
 
-	before := BasePrice(c, 500)
-	_ = BasePrice(c, 10)
-	_ = BasePrice(c, 50000)
-	_ = BasePrice(c, 1)
-	after := BasePrice(c, 500)
+	before := BasePrice(c, 500, nil)
+	_ = BasePrice(c, 10, nil)
+	_ = BasePrice(c, 50000, nil)
+	_ = BasePrice(c, 1, nil)
+	after := BasePrice(c, 500, nil)
 
 	if !before.Equal(after) {
 		t.Errorf("BasePrice(tick=500) = %s then %s: 呼び出し順序で結果が変わった", before, after)
@@ -154,7 +154,7 @@ func TestBasePrice_通貨が違えば結果も違う(t *testing.T) {
 	jog := testCurrency(1001, "0.0008", "0.05")
 	wasi := testCurrency(2002, "0.0020", "0.05")
 
-	if BasePrice(jog, 1000).Equal(BasePrice(wasi, 1000)) {
+	if BasePrice(jog, 1000, nil).Equal(BasePrice(wasi, 1000, nil)) {
 		t.Error("異なる通貨(seed/volatility)で同じ結果になった")
 	}
 }
@@ -169,8 +169,8 @@ func TestBasePrice_セッション外は変動が抑制される(t *testing.T) {
 
 	const tick = minutesPerDay * 5 // 5日分。ほぼ全時間帯がセッション外。
 
-	got := BasePrice(suppressed, tick)
-	base := BasePrice(unsuppressed, tick)
+	got := BasePrice(suppressed, tick, nil)
+	base := BasePrice(unsuppressed, tick, nil)
 
 	diffFromStart := got.Sub(suppressed.BasePrice).Abs()
 	diffFromStartUnsuppressed := base.Sub(unsuppressed.BasePrice).Abs()
@@ -190,7 +190,7 @@ func BenchmarkBasePrice(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		BasePrice(c, tick)
+		BasePrice(c, tick, nil)
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(tick), "ns/tick")
 }

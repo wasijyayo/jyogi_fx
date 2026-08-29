@@ -105,6 +105,10 @@ func (s *SessionService) IsNewOrderAllowed(now time.Time) bool { return s.cfg.Is
 //  4. 寄り付きキャンドルを1本保存
 //  8. セッション開始（game_sessions に当日行を作成）
 //
+// これに加えて、§2.7 の9手順には明示されていないが §5.1 で「セッション開始時に」
+// 行うと定められているその日のイベント抽選（確定#23）もここで行う（#40 EVENT-1。
+// StoreSessionEvents）。
+//
 // 手順 5〜7（持ち越し建玉の再評価・清算判定）は、この関数の**呼び出し元**
 // （TickService.Tick）が OpenSession 成功後に LiquidationService を呼ぶ形で
 // 実装した（#38 TRADE-3）。OpenSession 自身がロスカットの決済処理
@@ -158,6 +162,15 @@ func (s *SessionService) OpenSession(ctx context.Context, now time.Time) (db.Gam
 		}
 	}
 
+	// その日のイベントを抽選し尽くしてDBに書き込む（確定#23。design.md §5.1。#40 EVENT-1）。
+	// openCurrencyより後でも先でも結果は変わらない（今日抽選されるイベントの
+	// グローバルfire_tickは必ず「このセッションの開始tick+2以上」になるため、
+	// 今まさに書いているこの寄り付きtick自体には決して影響しない。event.goの
+	// StoreSessionEventsコメント参照）。
+	if err := StoreSessionEvents(ctx, q, session, currencies); err != nil {
+		return db.GameSession{}, fmt.Errorf("store session events: %w", err)
+	}
+
 	// 持ち越し建玉の再評価・清算判定は呼び出し元（TickService.Tick）が担当する
 	// （#38。このファイル冒頭のOpenSessionコメント参照）。
 	// TODO(#39): /claim用中央値算出。
@@ -188,7 +201,11 @@ func openCurrency(ctx context.Context, q *db.Queries, session db.GameSession, c 
 		return fmt.Errorf("get last price tick: %w", err)
 	}
 
-	closePrice := BasePrice(c, nowTick)
+	events, err := q.ListEventsByCurrency(ctx, c.ID)
+	if err != nil {
+		return fmt.Errorf("list events for %s: %w", c.Symbol, err)
+	}
+	closePrice := BasePrice(c, nowTick, events)
 	high := decimal.Max(openPrice, closePrice)
 	low := decimal.Min(openPrice, closePrice)
 
