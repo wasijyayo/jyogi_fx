@@ -50,8 +50,12 @@ func TotalAssetsByUser(ctx context.Context, q *db.Queries, now time.Time) (map[s
 			continue
 		}
 
+		events, err := q.ListEventsByCurrency(ctx, c.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list events for %s: %w", c.Symbol, err)
+		}
 		tickIndex := elapsedTicks(c.EpochAt.Time, now)
-		price := CurrentPrice(c, tickIndex, now)
+		price := CurrentPrice(c, tickIndex, now, events)
 
 		for _, p := range positions {
 			assets[p.UserID] = assets[p.UserID].Add(PositionPnL(p, price))
