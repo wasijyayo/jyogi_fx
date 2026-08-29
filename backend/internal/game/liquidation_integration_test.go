@@ -75,7 +75,7 @@ func TestLiquidateOpenPositions_清算基準を割ったポジションが強制
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 
 	leverage := decimal.NewFromInt(10) // 清算距離5%（design.md §2.8/§5.2）
@@ -129,7 +129,7 @@ func TestLiquidateOpenPositions_清算距離内のポジションは維持され
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 
 	leverage := decimal.NewFromInt(10) // 清算距離5%（design.md §2.8/§5.2）
@@ -186,7 +186,7 @@ func TestTick_セッション外の時刻を注入しても清算は実行され
 	// AlwaysOpen のセッションで PlaceOrder する（epoch自体はセッション開始時刻なので
 	// 本来は不要だが、他のテストとの対称性のため明示する）。
 	setupSessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{AlwaysOpen: true})
-	setupTradeSvc := NewTradeService(pool, RealClock{}, setupSessionSvc)
+	setupTradeSvc := NewTradeService(pool, RealClock{}, setupSessionSvc, nil, decimal.Zero)
 
 	leverage := decimal.NewFromInt(10)
 	// 清算距離5%を大きく超える含み損（-50%）を用意し、「判定さえされれば確実に
@@ -197,13 +197,13 @@ func TestTick_セッション外の時刻を注入しても清算は実行され
 
 	// 本番相当の非AlwaysOpenセッションでTickServiceを組み立てる。
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 	claimSvc := NewClaimService(pool, RealClock{}, ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),
 		BuffMultiplier: decimal.NewFromFloat(1.5),
 	})
-	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil)
+	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil, nil, nil)
 
 	offSession := time.Date(2099, 4, 1, 15, 0, 0, 0, jst) // JST 15:00。セッション（12-13時）外。
 	if err := tickSvc.Tick(ctx, offSession); err != nil {

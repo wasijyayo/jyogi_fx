@@ -27,7 +27,7 @@ func validOrderParams() PlaceOrderParams {
 func TestPlaceOrder_入力検証はDBに触る前に弾かれる(t *testing.T) {
 	// AlwaysOpen: true にして、セッション判定ではなく検証対象の項目だけを切り出して確認する。
 	sessionSvc := NewSessionService(nil, RealClock{}, SessionConfig{AlwaysOpen: true})
-	svc := NewTradeService(nil, RealClock{}, sessionSvc)
+	svc := NewTradeService(nil, RealClock{}, sessionSvc, nil, decimal.Zero)
 	now := time.Date(2026, 1, 1, 12, 30, 0, 0, jst)
 
 	tests := []struct {
@@ -76,7 +76,7 @@ func TestPlaceOrder_入力検証はDBに触る前に弾かれる(t *testing.T) {
 // 使っていること（確定#14/#48）を、DBに触らずに確認する。
 func TestPlaceOrder_セッション外は新規注文を拒否する(t *testing.T) {
 	sessionSvc := NewSessionService(nil, RealClock{}, SessionConfig{}) // AlwaysOpen なし
-	svc := NewTradeService(nil, RealClock{}, sessionSvc)
+	svc := NewTradeService(nil, RealClock{}, sessionSvc, nil, decimal.Zero)
 
 	tests := []struct {
 		name string

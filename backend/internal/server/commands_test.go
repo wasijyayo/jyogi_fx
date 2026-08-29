@@ -246,7 +246,7 @@ func TestSlashCommands_操作系(t *testing.T) {
 	}
 
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{AlwaysOpen: true})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, nil, decimal.Zero)
 	rankingSvc := game.NewRankingService(pool, game.RealClock{})
 	claimSvc := game.NewClaimService(pool, game.RealClock{}, game.ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),

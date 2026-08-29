@@ -31,3 +31,9 @@ SELECT * FROM price_ticks
 WHERE currency_id = $1
 ORDER BY tick_index DESC
 LIMIT $2;
+
+-- name: GetOpeningPriceTick :one
+-- 日次まとめ（design.md §6.9、#44 NOTIFY-2）の「本日の最大変動通貨」算出用に、
+-- そのセッションの寄り付きキャンドル（本日の始値）を取得する。
+SELECT * FROM price_ticks
+WHERE session_id = $1 AND currency_id = $2 AND is_opening = TRUE;

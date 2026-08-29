@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -93,10 +94,17 @@ type TradeService struct {
 	// 将来 now を引数に取らない便利メソッドを追加する時のために保持する。
 	clock   Clock
 	session *SessionService
+	// notify は大口取引通知（design.md §6.7、#44 NOTIFY-2）の投稿先。nilなら通知しない。
+	notify *NotifyService
+	// largeTradeThresholdPercent はこの値（%の絶対値）以上の価格インパクトを
+	// 引き起こした新規注文を「大口取引」として通知する閾値。design.mdに閾値の
+	// 定義が無かったためユーザーに確認して決定した（main.goのLARGE_TRADE_IMPACT_PERCENT
+	// 環境変数で上書き可能）。ゼロ以下なら大口取引通知自体を行わない。
+	largeTradeThresholdPercent decimal.Decimal
 }
 
-func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService) *TradeService {
-	return &TradeService{pool: pool, clock: clock, session: session}
+func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, notify *NotifyService, largeTradeThresholdPercent decimal.Decimal) *TradeService {
+	return &TradeService{pool: pool, clock: clock, session: session, notify: notify, largeTradeThresholdPercent: largeTradeThresholdPercent}
 }
 
 // PlaceOrder は成行注文で新規建玉を作成する（#36 TRADE-1。design.md §7.0/§7.3/§2.2）。
@@ -227,6 +235,12 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 	// 約3.3倍（1/0.3）になる（design.md §5.4）。base(n)には触れず、ここで
 	// UpdatePressureに渡すliquidityだけを差し替える。
 	liquidity := currency.Liquidity.Mul(liquidityMultiplierAt(events, tickIndex))
+	// 大口取引通知（#44 NOTIFY-2）用に、この注文自身が引き起こした価格インパクトを
+	// 「更新前後の圧力比」から求める（entryPrice = base×(1+oldPressure)、
+	// 更新後の価格 = base×(1+newPressure) なので、baseを再計算しなくても
+	// (1+newPressure)/(1+oldPressure) - 1 で変化率が求まる。BasePriceは経過tick数に
+	// 比例したコストがかかるため二重に呼ばない。pricing.goのコメントと同じ理由）。
+	oldPressure := Pressure(currency, now)
 	newPressure := UpdatePressure(currency, now, signedVolume, liquidity)
 	if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
 		ID:         currency.ID,
@@ -239,6 +253,13 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 	if err := tx.Commit(ctx); err != nil {
 		return PlaceOrderResult{}, fmt.Errorf("commit tx: %w", err)
 	}
+
+	// 大口取引通知（design.md §6.7 MVP必須）。コミット後のベストエフォートで、
+	// 失敗しても注文自体は成立済みなのでエラーにはしない（ticker.go/tick_notify.goと
+	// 同じ方針）。ClosePositionではこの通知を行わない（大きなポジションは新規建玉時に
+	// 既に通知済みのため、決済時に同じ規模を再度知らせると重複した印象になる。
+	// ロスカットによる決済は別途「強制ロスカット通知」でカバーされる）。
+	s.maybeNotifyLargeTrade(ctx, user.DisplayName, currency.Symbol, p.Side, oldPressure, newPressure)
 
 	return PlaceOrderResult{Position: position, Trade: trade, NewBalance: newBalance}, nil
 }
@@ -399,4 +420,21 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 	}
 
 	return ClosePositionResult{Position: closedPosition, Trade: trade, NewBalance: newBalance}, nil
+}
+
+// maybeNotifyLargeTrade は大口取引通知（design.md §6.7、#44 NOTIFY-2）の閾値判定。
+// oldPressure/newPressureから価格変化率（%）を求め、閾値以上ならNotifyService.LargeTrade
+// を呼ぶ。PlaceOrder内でtx.Commit後に呼ぶ想定（呼び出し元のコメント参照）。
+func (s *TradeService) maybeNotifyLargeTrade(ctx context.Context, displayName, symbol string, side Side, oldPressure, newPressure decimal.Decimal) {
+	if s.notify == nil || !s.largeTradeThresholdPercent.IsPositive() {
+		return
+	}
+	one := decimal.NewFromInt(1)
+	impactPercent := one.Add(newPressure).Div(one.Add(oldPressure)).Sub(one).Mul(decimal.NewFromInt(100))
+	if impactPercent.Abs().LessThan(s.largeTradeThresholdPercent) {
+		return
+	}
+	if err := s.notify.LargeTrade(ctx, displayName, symbol, side, impactPercent); err != nil {
+		log.Printf("large trade notify: %v", err)
+	}
 }

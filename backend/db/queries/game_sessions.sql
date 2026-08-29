@@ -31,3 +31,11 @@ WHERE id = $1;
 UPDATE game_sessions
 SET ticker_msg_id = $2
 WHERE id = $1;
+
+-- name: MarkGameSessionClosingNotified :exec
+-- セッション終了通知＋日次まとめ（design.md §6.7・§6.9、#44 NOTIFY-2）を投稿できたら呼ぶ。
+-- closing_notified=FALSEの行にしかヒットしないため、tickの重複実行で二重投稿されない
+-- （events.teased/resolvedと同じ冪等性パターン。CLAUDE.md §5.5）。
+UPDATE game_sessions
+SET closing_notified = TRUE
+WHERE id = $1 AND closing_notified = FALSE;

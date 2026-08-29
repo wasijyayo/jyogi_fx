@@ -35,7 +35,7 @@ func TestListOpenPositions_含み損益込みで返す(t *testing.T) {
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{AlwaysOpen: true})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
 	leverage := decimal.NewFromInt(10)
 	// +10%含み益（liquidation_integration_test.goのsetupLiquidationTestPositionと同じ手法）。
 	position := setupLiquidationTestPosition(
@@ -72,7 +72,7 @@ func TestListOpenPositions_ポジションが無ければ空(t *testing.T) {
 	defer cancel()
 	pool := connectTestDB(t, ctx)
 
-	tradeSvc := NewTradeService(pool, RealClock{}, NewSessionService(pool, RealClock{}, SessionConfig{}))
+	tradeSvc := NewTradeService(pool, RealClock{}, NewSessionService(pool, RealClock{}, SessionConfig{}), nil, decimal.Zero)
 	got, err := tradeSvc.ListOpenPositions(ctx, time.Now(), "test-positions-nonexistent-user")
 	if err != nil {
 		t.Fatalf("ListOpenPositions: %v", err)

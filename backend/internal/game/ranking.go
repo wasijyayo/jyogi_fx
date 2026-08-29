@@ -31,6 +31,10 @@ type TodayRankEntry struct {
 	DisplayName   string
 	TotalAssets   decimal.Decimal
 	ChangePercent decimal.Decimal // セッション開始時からの総資産変化率（%）
+	// ChangeAmount はセッション開始時からの総資産変化額（絶対額）。
+	// /todayコマンド自体には使わないが、日次まとめ（design.md §6.9、#44 NOTIFY-2）の
+	// 「+142,300 (+38.2%)」のような絶対額表示に使う。
+	ChangeAmount decimal.Decimal
 }
 
 // RankingService はランキング集計（#41 CMD-1）を担当する。
@@ -136,12 +140,14 @@ func (s *RankingService) RankByTodayChange(ctx context.Context, now time.Time) (
 			continue
 		}
 		cur := current[u.DiscordID]
-		changePercent := cur.Sub(base).Div(base).Mul(decimal.NewFromInt(100))
+		changeAmount := cur.Sub(base)
+		changePercent := changeAmount.Div(base).Mul(decimal.NewFromInt(100))
 		entries = append(entries, TodayRankEntry{
 			UserID:        u.DiscordID,
 			DisplayName:   u.DisplayName,
 			TotalAssets:   cur,
 			ChangePercent: changePercent,
+			ChangeAmount:  changeAmount,
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
