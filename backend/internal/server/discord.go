@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"fxgame/backend/internal/discord"
 )
 
 // interactionType は Discord が送ってくる Interaction の種別。
@@ -37,13 +39,6 @@ const (
 	callbackChannelMessage     interactionCallbackType = 4 // メッセージを返す
 	callbackDeferredChannelMsg interactionCallbackType = 5 // 「考え中…」（3秒制限の回避用。#42では未使用。discord.goのhandleInteractionsコメント参照）
 	callbackModal              interactionCallbackType = 9 // モーダルを開く（#42: /priceの買う/売るボタン→数量入力）
-)
-
-// Discordのボタンスタイル（#42）。
-const (
-	buttonStyleSecondary = 2 // 灰色。中立的な操作（キャンセル等）
-	buttonStyleSuccess   = 3 // 緑。買い・確定などポジティブな操作
-	buttonStyleDanger    = 4 // 赤。売り・決済などの破壊的操作
 )
 
 // Discordのテキスト入力スタイル（モーダル用。#42）。
@@ -145,31 +140,14 @@ type interactionResponse struct {
 type interactionResponseData struct {
 	Content    string              `json:"content,omitempty"`
 	Embeds     []discordEmbed      `json:"embeds,omitempty"`
-	Components []discordActionRow  `json:"components,omitempty"`
+	Components []discord.ActionRow `json:"components,omitempty"`
 	Flags      int                 `json:"flags,omitempty"`
 }
 
-// discordActionRow はボタンを並べる行（type:1。#42）。Discordの仕様上、
-// ボタンは必ずAction Rowに入れ子にする必要があり、直接componentsには置けない。
-type discordActionRow struct {
-	Type       int             `json:"type"` // 1固定
-	Components []discordButton `json:"components"`
-}
-
-// discordButton はDiscordのボタンコンポーネント（type:2。#42）。
-type discordButton struct {
-	Type     int    `json:"type"` // 2固定
-	Style    int    `json:"style"`
-	Label    string `json:"label"`
-	CustomID string `json:"custom_id"`
-}
-
-// newActionRow は1つのボタンだけを持つAction Rowを作る簡易ヘルパー。
-// #42で必要になるボタンは常に「1行1ボタン」（決済ボタン等）のため、
-// 呼び出し側で毎回Action Rowの入れ子を書かなくて済むようにする。
-func newActionRow(buttons ...discordButton) discordActionRow {
-	return discordActionRow{Type: 1, Components: buttons}
-}
+// ボタン・Action Rowの型（discordButton/discordActionRow/newActionRow）は
+// internal/discordに移した（issue #78。市場ティッカーの買う/売るボタン常設で
+// internal/gameからも同じ型を使うため。CLAUDE.md §3の層構造を壊さないよう
+// server/gameの共通の型は internal/discord に置く）。
 
 // interactionModalResponse はモーダルを開く応答（callback type:9。#42）。
 // interactionResponse（type:4等）とは data の形が異なるため別の型にする。

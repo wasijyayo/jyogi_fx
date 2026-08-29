@@ -34,7 +34,7 @@ func TestCreateMessage(t *testing.T) {
 
 	cfg := discord.MessagesConfig{BotToken: "the-token", APIBaseURL: srv.URL}
 
-	got, err := discord.CreateMessage(context.Background(), cfg, "chan-1", "📊 マーケット")
+	got, err := discord.CreateMessage(context.Background(), cfg, "chan-1", "📊 マーケット", nil)
 	if err != nil {
 		t.Fatalf("CreateMessage: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestEditMessage(t *testing.T) {
 
 	cfg := discord.MessagesConfig{BotToken: "the-token", APIBaseURL: srv.URL}
 
-	if err := discord.EditMessage(context.Background(), cfg, "chan-1", "msg-1", "更新後の本文"); err != nil {
+	if err := discord.EditMessage(context.Background(), cfg, "chan-1", "msg-1", "更新後の本文", nil); err != nil {
 		t.Fatalf("EditMessage: %v", err)
 	}
 	if gotMethod != http.MethodPatch {
@@ -79,6 +79,43 @@ func TestEditMessage(t *testing.T) {
 	}
 	if gotPath != "/channels/chan-1/messages/msg-1" {
 		t.Errorf("path = %q", gotPath)
+	}
+}
+
+// TestCreateMessage_componentsを送る は市場ティッカーの買う/売るボタン常設
+// （issue #78）用に、componentsが渡された場合にリクエストボディへ含まれることを確認する。
+func TestCreateMessage_componentsを送る(t *testing.T) {
+	var gotBody struct {
+		Components []discord.ActionRow `json:"components"`
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/channels/chan-1/messages", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "msg-1"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := discord.MessagesConfig{BotToken: "the-token", APIBaseURL: srv.URL}
+	components := []discord.ActionRow{
+		discord.NewActionRow(
+			discord.Button{Type: 2, Style: discord.ButtonStyleSuccess, Label: "買う", CustomID: "order:long:JOG"},
+			discord.Button{Type: 2, Style: discord.ButtonStyleDanger, Label: "売る", CustomID: "order:short:JOG"},
+		),
+	}
+
+	if _, err := discord.CreateMessage(context.Background(), cfg, "chan-1", "content", components); err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	if len(gotBody.Components) != 1 || len(gotBody.Components[0].Components) != 2 {
+		t.Fatalf("components が正しく送られていない: %+v", gotBody.Components)
+	}
+	if gotBody.Components[0].Components[0].CustomID != "order:long:JOG" {
+		t.Errorf("custom_id = %q, want order:long:JOG", gotBody.Components[0].Components[0].CustomID)
 	}
 }
 
@@ -127,7 +164,7 @@ func TestCreateMessage_Discordがエラーを返したら失敗として扱う(t
 
 	cfg := discord.MessagesConfig{BotToken: "the-token", APIBaseURL: srv.URL}
 
-	if _, err := discord.CreateMessage(context.Background(), cfg, "chan-1", "content"); err == nil {
+	if _, err := discord.CreateMessage(context.Background(), cfg, "chan-1", "content", nil); err == nil {
 		t.Fatal("want error, got nil")
 	}
 }

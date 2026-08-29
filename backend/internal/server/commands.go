@@ -17,8 +17,9 @@ import (
 
 // customID のプレフィックス（#42）。ボタン・モーダルの custom_id は
 // "プレフィックス:パラメータ..." の形でエンコードする（encodeCustomID/decodeCustomID）。
+// customIDOrderButton（order:<long|short>:<symbol>）は internal/game（市場ティッカーの
+// 常設ボタン。issue #78）も同じ値を使うため discord.CustomIDOrderButton に置いてある。
 const (
-	customIDOrderButton  = "order"         // order:<long|short>:<symbol>        価格Embedのボタン→モーダルを開く
 	customIDOrderSubmit  = "order_submit"  // order_submit:<long|short>:<symbol> モーダル送信→発注
 	customIDClose        = "close"         // close:<positionID>                 決済ボタン→確認を出す
 	customIDCloseConfirm = "close_confirm" // close_confirm:<positionID>         確認の「はい」→実際に決済
@@ -210,8 +211,12 @@ func handleProfileCommand(ctx context.Context, cfg Config, req interactionReques
 // handlePriceCommand は /price <通貨>（design.md §6.3・§6.4・§6.6）。
 // 現在価格・変動率・スパークラインに加え、「買う」「売る」ボタンを付ける
 // （§6.3「/price USD → 現在価格 + 「買う」「売る」ボタン → 数量をモーダル入力」）。
-// 誰でも見られる市況情報なので公開メッセージにする（ephemeralにしない）。
-// ボタンは押した人自身の注文フローに入る（/priceを実行した人に限定しない）。
+//
+// ephemeral（本人にだけ見える）にしてある（issue #78。当初「誰でも見られる市況情報
+// なので公開」としていたが、常に見えるべき市況情報は市場ティッカー（#43）の常設
+// ボタンに役割を移したため、/price自体は個人の操作としてephemeralにした）。
+// ボタンは押した人自身の注文フローに入る（/priceを実行した人に限定しない。
+// ティッカーの常設ボタンと同じcustom_id形式のため、handleOrderButtonが共通で処理する）。
 func handlePriceCommand(ctx context.Context, cfg Config, req interactionRequest, now time.Time) interactionResponseData {
 	symbol := strings.ToUpper(strings.TrimSpace(commandOptionValue(req.Data, "currency")))
 	if symbol == "" {
@@ -245,12 +250,13 @@ func handlePriceCommand(ctx context.Context, cfg Config, req interactionRequest,
 			Description: description,
 			Color:       colorForChangePercent(quote.ChangePercent),
 		}},
-		Components: []discordActionRow{
-			newActionRow(
-				discordButton{Type: 2, Style: buttonStyleSuccess, Label: "買う", CustomID: encodeCustomID(customIDOrderButton, string(game.SideLong), quote.Symbol)},
-				discordButton{Type: 2, Style: buttonStyleDanger, Label: "売る", CustomID: encodeCustomID(customIDOrderButton, string(game.SideShort), quote.Symbol)},
+		Components: []discord.ActionRow{
+			discord.NewActionRow(
+				discord.Button{Type: 2, Style: discord.ButtonStyleSuccess, Label: "買う", CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(game.SideLong), quote.Symbol)},
+				discord.Button{Type: 2, Style: discord.ButtonStyleDanger, Label: "売る", CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(game.SideShort), quote.Symbol)},
 			),
 		},
+		Flags: messageFlagEphemeral,
 	}
 }
 
@@ -289,7 +295,7 @@ func handlePositionsCommand(ctx context.Context, cfg Config, req interactionRequ
 	// （Discordは1メッセージにEmbedを複数付けられる）。決済ボタンも同様に
 	// 1ポジション1Action Rowにして対応づける。
 	embeds := make([]discordEmbed, 0, len(shown))
-	rows := make([]discordActionRow, 0, len(shown))
+	rows := make([]discord.ActionRow, 0, len(shown))
 	for _, p := range shown {
 		sideLabel := "ロング"
 		if game.Side(p.Position.Side) == game.SideShort {
@@ -301,11 +307,11 @@ func handlePositionsCommand(ctx context.Context, cfg Config, req interactionRequ
 				formatAmount(p.Position.EntryPrice), formatAmount(p.CurrentPrice), formatAmount(p.UnrealizedPnL)),
 			Color: colorForPnL(p.UnrealizedPnL),
 		})
-		rows = append(rows, newActionRow(discordButton{
+		rows = append(rows, discord.NewActionRow(discord.Button{
 			Type:     2,
-			Style:    buttonStyleDanger,
+			Style:    discord.ButtonStyleDanger,
 			Label:    "決済（" + p.CurrencySymbol + "）",
-			CustomID: encodeCustomID(customIDClose, strconv.FormatInt(p.Position.ID, 10)),
+			CustomID: discord.EncodeCustomID(customIDClose, strconv.FormatInt(p.Position.ID, 10)),
 		}))
 	}
 
@@ -377,8 +383,8 @@ func handleMessageComponent(ctx context.Context, cfg Config, req interactionRequ
 	}
 
 	switch parts[0] {
-	case customIDOrderButton:
-		return handleOrderButton(parts)
+	case discord.CustomIDOrderButton:
+		return handleOrderButton(ctx, cfg, now, parts)
 	case customIDClose:
 		return channelMessage(handleCloseButton(parts))
 	case customIDCloseConfirm:
@@ -395,10 +401,18 @@ func channelMessage(data interactionResponseData) interactionResponse {
 	return interactionResponse{Type: callbackChannelMessage, Data: &data}
 }
 
-// handleOrderButton は /price の「買う」「売る」ボタン押下を処理する。
+// handleOrderButton は /price・市場ティッカーの「買う」「売る」ボタン押下を処理する
+// （issue #78でティッカーにも同じcustom_id形式のボタンが常設されたため、
+// 両方から呼ばれる共通の処理になった）。
 // 数量（・レバレッジ）はモーダルで入力させる（design.md §6.3）ため、
 // ここでは発注せずモーダルを開く応答を返すだけ。
-func handleOrderButton(parts []string) any {
+//
+// モーダルのタイトルに現在価格を入れる（issue #78のユーザーフィードバック
+// 「一株何円するのかをモーダル表示したい」への対応）。Discordのモーダルは
+// 入力内容に応じて動的に表示を再計算する仕組みが無いため、「レバレッジをかけた後の
+// 残額」のような入力依存の値は表示できない。現在価格は入力に依存しないため
+// タイトルに含められる。
+func handleOrderButton(ctx context.Context, cfg Config, now time.Time, parts []string) any {
 	if len(parts) != 3 {
 		return channelMessage(errorCommandResponse("不明な操作です。"))
 	}
@@ -408,11 +422,19 @@ func handleOrderButton(parts []string) any {
 		label = "売る"
 	}
 
+	title := fmt.Sprintf("%sを%s", symbol, label)
+	if quote, err := cfg.Quote.Quote(ctx, now, symbol); err == nil {
+		title = fmt.Sprintf("%sを%s（現在%s円）", symbol, label, formatAmount(quote.CurrentPrice))
+	} else {
+		// 価格取得に失敗しても発注フロー自体は止めない。価格なしのタイトルで続行する。
+		log.Printf("order button: quote for title: %v", err)
+	}
+
 	return interactionModalResponse{
 		Type: callbackModal,
 		Data: &interactionModalData{
-			CustomID: encodeCustomID(customIDOrderSubmit, side, symbol),
-			Title:    fmt.Sprintf("%sを%s", symbol, label),
+			CustomID: discord.EncodeCustomID(customIDOrderSubmit, side, symbol),
+			Title:    title,
 			Components: []discordTextInputRow{
 				newTextInputRow(discordTextInput{
 					Type: 4, CustomID: "size", Label: "数量", Style: textInputStyleShort, Required: true,
@@ -435,10 +457,10 @@ func handleCloseButton(parts []string) interactionResponseData {
 	positionID := parts[1]
 	return interactionResponseData{
 		Content: "本当にこのポジションを決済しますか？",
-		Components: []discordActionRow{
-			newActionRow(
-				discordButton{Type: 2, Style: buttonStyleDanger, Label: "はい、決済する", CustomID: encodeCustomID(customIDCloseConfirm, positionID)},
-				discordButton{Type: 2, Style: buttonStyleSecondary, Label: "いいえ", CustomID: customIDCloseCancel},
+		Components: []discord.ActionRow{
+			discord.NewActionRow(
+				discord.Button{Type: 2, Style: discord.ButtonStyleDanger, Label: "はい、決済する", CustomID: discord.EncodeCustomID(customIDCloseConfirm, positionID)},
+				discord.Button{Type: 2, Style: discord.ButtonStyleSecondary, Label: "いいえ", CustomID: customIDCloseCancel},
 			),
 		},
 		Flags: messageFlagEphemeral,
@@ -580,13 +602,10 @@ func commandOptionValue(data *interactionCommandData, name string) string {
 	return ""
 }
 
-// encodeCustomID/decodeCustomID はボタン・モーダルのcustom_idのエンコード規約
-// （"プレフィックス:パラメータ..."）。通貨コード・ポジションIDのいずれも
-// ":"を含みえないため単純な分割で安全に往復できる。
-func encodeCustomID(parts ...string) string {
-	return strings.Join(parts, ":")
-}
-
+// decodeCustomID はボタン・モーダルのcustom_idのデコード規約
+// （"プレフィックス:パラメータ..."）。エンコード側は discord.EncodeCustomID
+// （internal/gameの市場ティッカーの常設ボタンとも共通の規約。issue #78）。
+// 通貨コード・ポジションIDのいずれも":"を含みえないため単純な分割で安全に往復できる。
 func decodeCustomID(customID string) []string {
 	if customID == "" {
 		return nil

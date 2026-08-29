@@ -54,13 +54,18 @@ func (s *TickerService) Update(ctx context.Context, now time.Time, session db.Ga
 	if err != nil {
 		return fmt.Errorf("build ticker content: %w", err)
 	}
+	// 各通貨の買う/売るボタンを常設する（issue #78。design.md §6.11の見直し。
+	// /priceがephemeralになった代わりに、常に見えるティッカーからも売買を
+	// 始められるようにする）。EditMessageのコメントのとおり、編集のたびに
+	// 同じcomponentsを渡し続けないとボタンが消えうる。
+	components := tickerComponents(currencies)
 
 	if session.TickerMsgID.Valid && session.TickerMsgID.String != "" {
 		// 新規投稿ではなく編集（design.md §6.4「チャンネルが荒れないため」）。
-		return discord.EditMessage(ctx, s.messages, s.channelID, session.TickerMsgID.String, content)
+		return discord.EditMessage(ctx, s.messages, s.channelID, session.TickerMsgID.String, content, components)
 	}
 
-	messageID, err := discord.CreateMessage(ctx, s.messages, s.channelID, content)
+	messageID, err := discord.CreateMessage(ctx, s.messages, s.channelID, content, components)
 	if err != nil {
 		return fmt.Errorf("create ticker message: %w", err)
 	}
@@ -165,4 +170,26 @@ func tickerRow(ctx context.Context, q *db.Queries, c db.Currency) (string, error
 
 	return fmt.Sprintf("%-6s %8s  %s%s%s%%  %s",
 		c.Symbol, current.StringFixed(2), arrow, sign, changePercent.Abs().StringFixed(1), sparkline(closes)), nil
+}
+
+// tickerComponents は各通貨の「買う」「売る」ボタンを1通貨1行（Action Row）で
+// 組み立てる（issue #78）。custom_idは/priceの応答（commands.go）と同じ
+// "order:<long|short>:<symbol>" 形式にすることで、既存のhandleOrderButtonが
+// ティッカー由来のボタンもそのまま処理できるようにしてある（押した人自身の
+// 注文フローに入る。/priceを実行した人・ティッカーを見ている人を区別しない）。
+func tickerComponents(currencies []db.Currency) []discord.ActionRow {
+	rows := make([]discord.ActionRow, 0, len(currencies))
+	for _, c := range currencies {
+		rows = append(rows, discord.NewActionRow(
+			discord.Button{
+				Type: 2, Style: discord.ButtonStyleSuccess, Label: c.Symbol + "を買う",
+				CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(SideLong), c.Symbol),
+			},
+			discord.Button{
+				Type: 2, Style: discord.ButtonStyleDanger, Label: c.Symbol + "を売る",
+				CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(SideShort), c.Symbol),
+			},
+		))
+	}
+	return rows
 }

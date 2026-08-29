@@ -30,17 +30,24 @@ func (c MessagesConfig) baseURL() string {
 
 // CreateMessage はチャンネルに新規メッセージを投稿し、投稿したメッセージ ID を返す
 // （design.md §6.4「専用チャンネルに1つのメッセージを投稿し」）。
-func CreateMessage(ctx context.Context, cfg MessagesConfig, channelID, content string) (messageID string, err error) {
+// components は省略可（nilなら"components"キー自体を送らない）。市場ティッカーの
+// 買う/売るボタン常設（issue #78）で使う。
+func CreateMessage(ctx context.Context, cfg MessagesConfig, channelID, content string, components []ActionRow) (messageID string, err error) {
 	url := fmt.Sprintf("%s/channels/%s/messages", cfg.baseURL(), channelID)
-	return sendChannelMessage(ctx, cfg, http.MethodPost, url, content)
+	return sendChannelMessage(ctx, cfg, http.MethodPost, url, content, components)
 }
 
 // EditMessage は既存メッセージの本文を書き換える
 // （design.md §6.4「毎分のtickでそれを編集し続ける」。新規投稿ではなく編集なので
 // チャンネルが荒れない）。
-func EditMessage(ctx context.Context, cfg MessagesConfig, channelID, messageID, content string) error {
+//
+// components は**呼び出しのたびに明示的に指定すること**。Discordのメッセージ編集は
+// 「渡さなかったフィールドは変更しない」ではなく、componentsキーを省略すると既存の
+// ボタンが消える可能性があるため、ボタンを維持したいなら毎回同じcomponentsを渡す
+// （issue #78）。付けない場合はnilを渡す。
+func EditMessage(ctx context.Context, cfg MessagesConfig, channelID, messageID, content string, components []ActionRow) error {
 	url := fmt.Sprintf("%s/channels/%s/messages/%s", cfg.baseURL(), channelID, messageID)
-	_, err := sendChannelMessage(ctx, cfg, http.MethodPatch, url, content)
+	_, err := sendChannelMessage(ctx, cfg, http.MethodPatch, url, content, components)
 	return err
 }
 
@@ -81,10 +88,11 @@ func DeleteMessage(ctx context.Context, cfg MessagesConfig, channelID, messageID
 // TickService.Tick がログするだけで tick 全体を失敗させない設計にしてあり、
 // 失敗しても次の tick（1分後）で自然に再試行される（冪等）ため、ここで
 // リトライループを持つ必要がない（design.md §11.3・CLAUDE.md §5.5と同じ考え方）。
-func sendChannelMessage(ctx context.Context, cfg MessagesConfig, method, url, content string) (string, error) {
+func sendChannelMessage(ctx context.Context, cfg MessagesConfig, method, url, content string, components []ActionRow) (string, error) {
 	body, err := json.Marshal(struct {
-		Content string `json:"content"`
-	}{Content: content})
+		Content    string      `json:"content"`
+		Components []ActionRow `json:"components,omitempty"`
+	}{Content: content, Components: components})
 	if err != nil {
 		return "", fmt.Errorf("marshal message body: %w", err)
 	}
