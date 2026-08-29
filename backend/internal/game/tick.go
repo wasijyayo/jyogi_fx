@@ -24,10 +24,11 @@ type TickService struct {
 	clock       Clock
 	session     *SessionService
 	liquidation *LiquidationService
+	claim       *ClaimService
 }
 
-func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService) *TickService {
-	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation}
+func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService, claim *ClaimService) *TickService {
+	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation, claim: claim}
 }
 
 // Tick は毎分呼ばれる処理の入口（design.md §4「毎分tickが担当する処理」）。
@@ -62,11 +63,7 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
-	jstNow := now.In(jst)
-	sessionDate := pgtype.Date{
-		Time:  time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 0, 0, 0, 0, jst),
-		Valid: true,
-	}
+	sessionDate := sessionDateJST(now)
 
 	q := db.New(s.pool)
 	gameSession, err := q.GetGameSessionByDate(ctx, sessionDate)
@@ -77,7 +74,8 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		// この呼び出しでは以降の通常tick書き込みは行わない（同じtick_indexに
 		// 寄り付きと通常の2つの意味で書き込むと窓の意図がぼやけるため）。
 		// 次のtick（1分後）から通常の書き込みに入る。
-		if _, err := s.session.OpenSession(ctx, now); err != nil {
+		openedSession, err := s.session.OpenSession(ctx, now)
+		if err != nil {
 			return fmt.Errorf("open session: %w", err)
 		}
 		// OpenSession が全通貨のpressureを0にリセットした直後にロスカット判定を
@@ -86,6 +84,11 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		// 判定に使う価格は寄り付き価格（base(n)。pressureは0）になる。
 		if _, err := s.liquidation.LiquidateOpenPositions(ctx, now); err != nil {
 			return fmt.Errorf("liquidate open positions at opening: %w", err)
+		}
+		// 手順8（design.md §2.7）: 手順6〜7（含み損益再評価・清算判定）が終わった
+		// 「後」の状態で /claim 用の中央値を算出・保存する（#39 ECON-1）。
+		if err := s.claim.RecordMedian(ctx, openedSession.ID, now); err != nil {
+			return fmt.Errorf("record claim median: %w", err)
 		}
 		return nil
 	case err != nil:

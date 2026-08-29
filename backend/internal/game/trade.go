@@ -14,6 +14,19 @@ import (
 	"fxgame/backend/internal/db"
 )
 
+// PositionPnL は position を currentPrice で評価した含み損益（純粋関数）。
+// long: (currentPrice - entry_price) × size、short: (entry_price - currentPrice) × size
+// （design.md §2.2）。ClosePosition（確定損益）・ShouldLiquidate（清算判定）・
+// TotalAssetsByUser（#39 ECON-1: /claim の中央値算出）が同じ式を使うため、
+// 3箇所で計算式が食い違わないようここに1つだけ置く。
+func PositionPnL(p db.Position, currentPrice decimal.Decimal) decimal.Decimal {
+	priceDiff := currentPrice.Sub(p.EntryPrice)
+	if Side(p.Side) == SideShort {
+		priceDiff = priceDiff.Neg()
+	}
+	return priceDiff.Mul(p.Size)
+}
+
 // Side は注文・ポジションの売買方向。positions.side / trades.side の値と一致させる
 // （design.md §8: side TEXT NOT NULL, -- long / short）。
 // long = 買い注文、short = 売り注文（design.md §2.2）。
@@ -316,11 +329,7 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 	exitPrice := CurrentPrice(currency, tickIndex, now, events)
 
 	side := Side(position.Side)
-	priceDiff := exitPrice.Sub(position.EntryPrice)
-	if side == SideShort {
-		priceDiff = priceDiff.Neg()
-	}
-	pnl := priceDiff.Mul(position.Size)
+	pnl := PositionPnL(position, exitPrice)
 
 	// 建玉時にロックした証拠金 = size × entry_price / leverage（PlaceOrderの計算そのまま）。
 	// 決済では損益とは独立にこの分を残高へ戻す。

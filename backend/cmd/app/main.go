@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"fxgame/backend/internal/discord"
 	"fxgame/backend/internal/game"
@@ -97,7 +98,24 @@ func runServe() error {
 	})
 	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc)
+
+	// CLAIM_BASE_AMOUNT・CLAIM_MEDIAN_BUFF_MULTIPLIER はデプロイなしで調整できる
+	// ようにする値（design.md §7.2・issue #39完了条件）。バフ倍率1.5倍は確定値
+	// （#15）だがissue側の要求どおり環境変数での上書きも許可する。
+	claimBaseAmount, err := decimalEnv("CLAIM_BASE_AMOUNT", "100")
+	if err != nil {
+		return fmt.Errorf("CLAIM_BASE_AMOUNT: %w", err)
+	}
+	claimBuffMultiplier, err := decimalEnv("CLAIM_MEDIAN_BUFF_MULTIPLIER", "1.5")
+	if err != nil {
+		return fmt.Errorf("CLAIM_MEDIAN_BUFF_MULTIPLIER: %w", err)
+	}
+	claimSvc := game.NewClaimService(pool, game.RealClock{}, game.ClaimConfig{
+		BaseAmount:     claimBaseAmount,
+		BuffMultiplier: claimBuffMultiplier,
+	})
+
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc)
 
 	mux := server.NewMux(server.Config{
 		Auth:             authSvc,
@@ -108,6 +126,16 @@ func runServe() error {
 	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+// decimalEnv は環境変数を decimal.Decimal として読む。未設定なら def を使う
+// （CLAUDE.md §5.2: floatを金額・倍率に使わないため strconv.ParseFloat は使わない）。
+func decimalEnv(key, def string) (decimal.Decimal, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		v = def
+	}
+	return decimal.NewFromString(v)
 }
 
 // runRegisterCommands は Discord にスラッシュコマンド定義を登録する（#29）。

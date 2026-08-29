@@ -23,3 +23,10 @@ FOR UPDATE;
 UPDATE users
 SET balance = $2
 WHERE discord_id = $1;
+
+-- name: ListAllUsers :many
+-- 「全登録者」の総資産を集計する起点（#39 ECON-1。design.md §7.2の中央値算出、
+-- 将来のランキング集計 #41 でも使う想定）。ここでは残高だけを取り、未決済ポジションの
+-- 含み損益は internal/game.TotalAssetsByUser 側で通貨ごとループして合算する
+-- （CLAUDE.md §5.3: user×currencyでなく常に全通貨ループで積み上げる）。
+SELECT discord_id, balance FROM users;
