@@ -281,9 +281,17 @@ func TestSlashCommands_操作系(t *testing.T) {
 		if ids[0] != "order:long:JOG" || ids[1] != "order:short:JOG" {
 			t.Errorf("custom_ids = %v, want [order:long:JOG order:short:JOG]", ids)
 		}
+
+		// issue #78: /priceはephemeral（本人にだけ見える）に変更した
+		// （常に見えるべき役割は市場ティッカーの常設ボタンに移した）。
+		data, _ := resp["data"].(map[string]any)
+		flags, _ := data["flags"].(float64)
+		if int(flags) != 1<<6 {
+			t.Errorf("/price の応答がephemeralでない: flags=%v", data["flags"])
+		}
 	})
 
-	t.Run("買うボタン押下でモーダルが開く", func(t *testing.T) {
+	t.Run("買うボタン押下でモーダルが開く（タイトルに現在価格を含む）", func(t *testing.T) {
 		body := `{"type":3,"data":{"custom_id":"order:long:JOG"},"member":{"user":{"id":"` + userID + `"}}}`
 		resp := sendInteraction(t, mux, priv, body)
 
@@ -294,6 +302,12 @@ func TestSlashCommands_操作系(t *testing.T) {
 		data, _ := resp["data"].(map[string]any)
 		if data["custom_id"] != "order_submit:long:JOG" {
 			t.Errorf("modal custom_id = %v, want order_submit:long:JOG", data["custom_id"])
+		}
+		// issue #78: モーダルのタイトルに現在価格を表示する
+		// （「一株何円するのかをモーダル表示したい」というフィードバックへの対応）。
+		title, _ := data["title"].(string)
+		if !strings.Contains(title, "円") {
+			t.Errorf("modal title = %q に現在価格が含まれていない", title)
 		}
 	})
 

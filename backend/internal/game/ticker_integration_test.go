@@ -59,14 +59,17 @@ func TestTickerService_Update(t *testing.T) {
 
 	var createCalls, editCalls int
 	var lastContent string
+	var lastComponents []discord.ActionRow
 	mux := http.NewServeMux()
 	mux.HandleFunc("/channels/ticker-chan/messages", func(w http.ResponseWriter, r *http.Request) {
 		createCalls++
 		var body struct {
-			Content string `json:"content"`
+			Content    string              `json:"content"`
+			Components []discord.ActionRow `json:"components"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		lastContent = body.Content
+		lastComponents = body.Components
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": "ticker-msg-1"})
 	})
@@ -76,10 +79,12 @@ func TestTickerService_Update(t *testing.T) {
 		}
 		editCalls++
 		var body struct {
-			Content string `json:"content"`
+			Content    string              `json:"content"`
+			Components []discord.ActionRow `json:"components"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		lastContent = body.Content
+		lastComponents = body.Components
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": "ticker-msg-1"})
 	})
@@ -102,6 +107,22 @@ func TestTickerService_Update(t *testing.T) {
 	}
 	if !strings.Contains(lastContent, tickerDivider) {
 		t.Errorf("content に区切り線が含まれない: %s", lastContent)
+	}
+	// 各通貨の買う/売るボタンが常設されていること（issue #78）。
+	// 実通貨（JOG/WASI/CHEBU）+テスト用通貨で複数行あるはず。
+	if len(lastComponents) == 0 {
+		t.Fatal("componentsが空: 買う/売るボタンが付いていない")
+	}
+	found := false
+	for _, row := range lastComponents {
+		for _, btn := range row.Components {
+			if btn.CustomID == "order:long:"+c.Symbol {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("テスト通貨 %s の買うボタン（custom_id=order:long:%s）が見つからない: %+v", c.Symbol, c.Symbol, lastComponents)
 	}
 	// 通貨の行の間に空行が入っていること（issue #75。スパークラインが最大の
 	// 高さ（█）になると行同士が詰まって見づらいというフィードバックへの対応）。

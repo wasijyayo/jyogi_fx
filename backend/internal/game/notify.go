@@ -39,7 +39,7 @@ func (n *NotifyService) post(ctx context.Context, content string) error {
 	if n == nil {
 		return nil
 	}
-	_, err := discord.CreateMessage(ctx, n.messages, n.channelID, content)
+	_, err := discord.CreateMessage(ctx, n.messages, n.channelID, content, nil)
 	return err
 }
 
