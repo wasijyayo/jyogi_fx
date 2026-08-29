@@ -156,6 +156,41 @@ func (s *RankingService) RankByTodayChange(ctx context.Context, now time.Time) (
 	return entries, nil
 }
 
+// LifetimePipsRankEntry は生涯獲得pipsランキング（/pips、#84）1行分。
+type LifetimePipsRankEntry struct {
+	UserID       string
+	DisplayName  string
+	LifetimePips decimal.Decimal
+}
+
+// RankByLifetimePips は全登録者を生涯累計pips（ネット。TradeService.ClosePositionが
+// 決済のたびに積み上げる値。#84「人生の勝者」ロールと同じ値）降順で並べた
+// ランキングを返す（design.md §7.7の軸候補に追加、ユーザーからの追加要望）。
+//
+// RankByTotalAssetsと違い未決済ポジションの含み損益は含めない（決済して確定した
+// pipsのみを積み上げる値のため、nowを引数に取る必要が無い）。
+func (s *RankingService) RankByLifetimePips(ctx context.Context) ([]LifetimePipsRankEntry, error) {
+	q := db.New(s.pool)
+
+	users, err := q.ListAllUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list all users: %w", err)
+	}
+
+	entries := make([]LifetimePipsRankEntry, 0, len(users))
+	for _, u := range users {
+		entries = append(entries, LifetimePipsRankEntry{
+			UserID:       u.DiscordID,
+			DisplayName:  u.DisplayName,
+			LifetimePips: u.LifetimePips,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].LifetimePips.GreaterThan(entries[j].LifetimePips)
+	})
+	return entries, nil
+}
+
 // RecordDailySnapshots は /today の基準値（セッション開始時点の全登録者の総資産）を
 // 保存する。design.md §2.7「寄り付き処理の順序」には明示されていないが、
 // ClaimService.RecordMedian（#39）と同じく手順6〜7（含み損益再評価・清算判定）の

@@ -120,9 +120,12 @@ type TradeService struct {
 	// 通知する閾値（#82。design.mdに定義は無く、ユーザーからの追加要望で実装した。
 	// main.goのPROFIT_PIPS_THRESHOLD環境変数で上書き可能）。ゼロ以下なら通知しない。
 	profitPipsThreshold decimal.Decimal
+	// lifeWinner は「人生の勝者」ロールの自動付与（#84）の担当。nilでも安全
+	// （LifeWinnerService.GrantIfEligibleのnilレシーバ対応）。
+	lifeWinner *LifeWinnerService
 }
 
-func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, notify *NotifyService, largeTradeThresholdPercent, profitPipsThreshold decimal.Decimal) *TradeService {
+func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, notify *NotifyService, largeTradeThresholdPercent, profitPipsThreshold decimal.Decimal, lifeWinner *LifeWinnerService) *TradeService {
 	return &TradeService{
 		pool:                       pool,
 		clock:                      clock,
@@ -130,6 +133,7 @@ func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, n
 		notify:                     notify,
 		largeTradeThresholdPercent: largeTradeThresholdPercent,
 		profitPipsThreshold:        profitPipsThreshold,
+		lifeWinner:                 lifeWinner,
 	}
 }
 
@@ -377,6 +381,9 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 
 	side := Side(position.Side)
 	pnl := PositionPnL(position, exitPrice)
+	// pipsMove は値動き幅（design.md §2.8のpips定義。sizeを掛けないためポジション
+	// サイズによらない）。利益確定通知（#82）と生涯累計pips（#84）の両方で使う。
+	pipsMove := PositionPnLPips(position, exitPrice)
 
 	// 建玉時にロックした証拠金 = size × entry_price / leverage（PlaceOrderの計算そのまま）。
 	// 決済では損益とは独立にこの分を残高へ戻す。
@@ -392,6 +399,19 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 		Balance:   newBalance,
 	}); err != nil {
 		return ClosePositionResult{}, fmt.Errorf("update user balance: %w", err)
+	}
+
+	// 生涯累計pips（#84「人生の勝者」ロール判定用。ネット＝ユーザーの言う
+	// 「現在の保持pips」）を更新する。通常決済・強制ロスカットのどちらもこの
+	// ClosePositionを通るため、この1箇所の更新だけで両方が積み上がる
+	// （CLAUDE.md §4）。残高と同じくコア台帳の一部として同一トランザクション内で
+	// 確実に更新する（通知やロール付与のようなベストエフォートとは扱いが違う）。
+	newLifetimePips := user.LifetimePips.Add(pipsMove)
+	if err := q.UpdateUserLifetimePips(ctx, db.UpdateUserLifetimePipsParams{
+		DiscordID:    user.DiscordID,
+		LifetimePips: newLifetimePips,
+	}); err != nil {
+		return ClosePositionResult{}, fmt.Errorf("update user lifetime pips: %w", err)
 	}
 
 	closedPosition, err := q.ClosePosition(ctx, db.ClosePositionParams{
@@ -445,9 +465,11 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 		return ClosePositionResult{}, fmt.Errorf("commit tx: %w", err)
 	}
 
-	// 利益確定通知（#82）。コミット後のベストエフォートで、失敗しても決済自体は
-	// 成立済みなのでエラーにはしない（maybeNotifyLargeTradeと同じ方針）。
-	s.maybeNotifyProfitTrade(ctx, user.DisplayName, currency.Symbol, side, PositionPnLPips(position, exitPrice))
+	// 利益確定通知（#82）・「人生の勝者」ロール付与（#84）。どちらもコミット後の
+	// ベストエフォートで、失敗しても決済自体は成立済みなのでエラーにはしない
+	// （maybeNotifyLargeTradeと同じ方針）。
+	s.maybeNotifyProfitTrade(ctx, user.DisplayName, currency.Symbol, side, pipsMove)
+	s.lifeWinner.GrantIfEligible(ctx, user.DiscordID, user.DisplayName, user.LifeWinnerGranted, newLifetimePips)
 
 	return ClosePositionResult{Position: closedPosition, Trade: trade, NewBalance: newBalance}, nil
 }

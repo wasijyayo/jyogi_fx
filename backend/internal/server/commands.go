@@ -62,6 +62,8 @@ func handleSlashCommand(ctx context.Context, cfg Config, req interactionRequest,
 		return handlePositionsCommand(ctx, cfg, req, now)
 	case discord.CommandClaim:
 		return handleClaimCommand(ctx, cfg, req, now)
+	case discord.CommandPips:
+		return handleLifetimePipsCommand(ctx, cfg)
 	default:
 		return unimplementedCommandResponse(req.Data.Name)
 	}
@@ -164,6 +166,37 @@ func handleTodayCommand(ctx context.Context, cfg Config, now time.Time) interact
 	return interactionResponseData{
 		Embeds: []discordEmbed{{
 			Title:       "📈 本日の増減ランキング",
+			Description: b.String(),
+			Color:       embedColorNeutral,
+		}},
+	}
+}
+
+// handleLifetimePipsCommand は /pips（生涯獲得pipsランキング。design.md §7.7の
+// 軸候補に追加、#84のユーザー追加要望）。/rank・/todayと同じく見せ合うための
+// コマンドなので公開メッセージにする（ephemeralにしない）。
+func handleLifetimePipsCommand(ctx context.Context, cfg Config) interactionResponseData {
+	entries, err := cfg.Ranking.RankByLifetimePips(ctx)
+	if err != nil {
+		log.Printf("pips command: %v", err)
+		return errorCommandResponse("エラーが発生しました。")
+	}
+
+	var b strings.Builder
+	if len(entries) == 0 {
+		b.WriteString("登録者がまだいません。")
+	}
+	for i, e := range entries {
+		sign := ""
+		if e.LifetimePips.IsPositive() {
+			sign = "+"
+		}
+		fmt.Fprintf(&b, "%d. <@%s> — %s%spips\n", i+1, e.UserID, sign, e.LifetimePips.StringFixed(0))
+	}
+
+	return interactionResponseData{
+		Embeds: []discordEmbed{{
+			Title:       "🏆 生涯獲得pipsランキング",
 			Description: b.String(),
 			Color:       embedColorNeutral,
 		}},

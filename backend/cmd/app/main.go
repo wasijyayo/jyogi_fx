@@ -131,12 +131,27 @@ func runServe() error {
 		return fmt.Errorf("PROFIT_PIPS_THRESHOLD: %w", err)
 	}
 
+	// 「人生の勝者」ロールの自動付与（design.md §6.10、#84）。DISCORD_GUILD_ID・
+	// DISCORD_LIFE_WINNER_ROLE_IDはどちらか未設定なら機能自体を無効化する
+	// （LifeWinnerService.GrantIfEligibleのガード。DISCORD_BOT_TOKEN等と違い
+	// フェイルファストにしない。ロールをDiscord側で作成する前でもデプロイできるように
+	// するため）。閾値（pips）はユーザーとの確認で決定したデフォルト10000。
+	discordGuildID := os.Getenv("DISCORD_GUILD_ID")
+	lifeWinnerRoleID := os.Getenv("DISCORD_LIFE_WINNER_ROLE_ID")
+	lifetimePipsThreshold, err := decimalEnv("LIFETIME_PIPS_THRESHOLD", "10000")
+	if err != nil {
+		return fmt.Errorf("LIFETIME_PIPS_THRESHOLD: %w", err)
+	}
+	lifeWinnerSvc := game.NewLifeWinnerService(pool, discord.MessagesConfig{
+		BotToken: discordBotToken,
+	}, notifySvc, discordGuildID, lifeWinnerRoleID, lifetimePipsThreshold)
+
 	// GAME_ALWAYS_OPEN=true で開発環境の「取引時間が常に開いている」モードを有効化する
 	// （CLAUDE.md §5.1）。本番では未設定のままにすること。
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{
 		AlwaysOpen: os.Getenv("GAME_ALWAYS_OPEN") == "true",
 	})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, notifySvc, largeTradeThresholdPercent, profitPipsThreshold)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, notifySvc, largeTradeThresholdPercent, profitPipsThreshold, lifeWinnerSvc)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
 
 	// CLAIM_BASE_AMOUNT・CLAIM_MEDIAN_BUFF_MULTIPLIER はデプロイなしで調整できる

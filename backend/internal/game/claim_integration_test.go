@@ -187,7 +187,7 @@ func TestTotalAssetsByUser_未決済ポジションの含み損益を含む(t *t
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{AlwaysOpen: true})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	leverage := decimal.NewFromInt(10)
 	// +10%含み益（liquidation_integration_test.goのsetupLiquidationTestPositionと
 	// 同じ手法: entry_price=base_price=100固定・pressureOverrideで含み損益を再現）。

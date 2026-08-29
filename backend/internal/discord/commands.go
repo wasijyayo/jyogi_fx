@@ -15,6 +15,9 @@ const (
 	CommandPositions = "positions"
 	CommandPrice     = "price"
 	CommandProfile   = "profile"
+	// CommandPips は生涯獲得pipsランキング（#84。design.md §7.7の軸候補に
+	// 追加した、ユーザーからの追加要望）。
+	CommandPips = "pips"
 )
 
 // Discord のスラッシュコマンド関連の enum 値。
@@ -103,5 +106,10 @@ var Commands = []Command{
 				Required:    false,
 			},
 		},
+	},
+	{
+		Type:        commandTypeChatInput,
+		Name:        CommandPips,
+		Description: "生涯獲得pipsランキングを表示します",
 	},
 }

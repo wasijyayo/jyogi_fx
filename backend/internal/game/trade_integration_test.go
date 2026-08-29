@@ -59,7 +59,7 @@ func TestPlaceOrder_成行注文で残高が減りポジションが作られ価
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 
 	// epoch と同時刻なので tickIndex=0 → BasePrice は base_price(=100) のまま動かない。
 	// pressure も投入直後は0なので、約定価格はちょうど100になるはず
@@ -178,7 +178,7 @@ func TestPlaceOrder_売り注文は圧力を下げ名目金額に応じた証拠
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 
 	now := epoch
 	size := decimal.NewFromInt(30)
@@ -253,7 +253,7 @@ func TestPlaceOrder_拒否された注文は残高もポジションも変化し
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	now := epoch
 
 	tests := []struct {
@@ -327,7 +327,7 @@ func TestClosePosition_損益が計算され残高と圧力に反映される(t 
 	q := db.New(pool)
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 
 	tests := []struct {
 		name             string
@@ -453,6 +453,78 @@ func TestClosePosition_損益が計算され残高と圧力に反映される(t 
 	}
 }
 
+// TestClosePosition_生涯累計pipsが決済のたびにネットで積み上がる は #84の完了条件
+// 「決済のたびにlifetime_pipsが正しく（ネットで）更新される」を確認する。
+// 勝ちトレード（+300pips相当）と負けトレード（-100pips相当）を順に決済し、
+// 単純な合計（+300）ではなくネットの純計（+200）になることを検証する
+// （ユーザーとの確認で決定した「現在の保持pips」という仕様）。
+func TestClosePosition_生涯累計pipsが決済のたびにネットで積み上がる(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	epoch := time.Date(2099, 4, 2, 12, 0, 0, 0, jst)
+	c := insertTestCurrency(t, ctx, pool, "LIFEPIPS", 999210, epoch)
+
+	userID := "test-lifetime-pips-user"
+	_, _ = pool.Exec(ctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+	setupTradeTestUser(t, ctx, q, userID, decimal.NewFromInt(1000))
+	t.Cleanup(func() {
+		cctx := context.Background()
+		_, _ = pool.Exec(cctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+		_, _ = pool.Exec(cctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+	})
+
+	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
+
+	// tick_index=0（epoch）は経過tick数0のためbase(0)=base_price=100が保証される
+	// （TestClosePosition_損益が計算され残高と圧力に反映されるのコメント参照）。
+	// 2件とも同じtickで建てるため、1件目のクローズが残す圧力を明示的に0へ
+	// リセットしてから2件目を建て、両方のentry_priceを100固定にしている。
+	closeAt := func(pressureOverride decimal.Decimal) {
+		if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
+			ID: c.ID, Pressure: decimal.Zero, PressureAt: pgtype.Timestamptz{Time: epoch, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpdateCurrencyPressure(reset): %v", err)
+		}
+		openResult, err := tradeSvc.PlaceOrder(ctx, epoch, PlaceOrderParams{
+			UserID: userID, CurrencySymbol: "LIFEPIPS", Side: SideLong,
+			Size: decimal.NewFromInt(1), Leverage: decimal.NewFromInt(1),
+		})
+		if err != nil {
+			t.Fatalf("PlaceOrder: %v", err)
+		}
+		if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
+			ID: c.ID, Pressure: pressureOverride, PressureAt: pgtype.Timestamptz{Time: epoch, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpdateCurrencyPressure(override): %v", err)
+		}
+		if _, err := tradeSvc.ClosePosition(ctx, epoch, ClosePositionParams{
+			UserID: userID, PositionID: openResult.Position.ID,
+		}); err != nil {
+			t.Fatalf("ClosePosition: %v", err)
+		}
+	}
+
+	closeAt(decimal.NewFromFloat(0.03))  // +300pips相当（建値100→約103）
+	closeAt(decimal.NewFromFloat(-0.01)) // -100pips相当（建値100→約99）
+
+	got, err := q.GetUser(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	want := decimal.NewFromInt(200) // +300 - 100
+	if !got.LifetimePips.Equal(want) {
+		t.Errorf("lifetime_pips = %s, want %s", got.LifetimePips, want)
+	}
+}
+
 // TestClosePosition_他人のポジションは決済できない は #37 の完了条件
 // 「他人の建玉を決済できないこと」を確認する。
 func TestClosePosition_他人のポジションは決済できない(t *testing.T) {
@@ -487,7 +559,7 @@ func TestClosePosition_他人のポジションは決済できない(t *testing.
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	now := epoch
 
 	openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
@@ -544,7 +616,7 @@ func TestClosePosition_存在しないポジションはエラーになる(t *te
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 
 	_, err := tradeSvc.ClosePosition(context.Background(), time.Now(), ClosePositionParams{
 		UserID: userID, PositionID: 999999999,
@@ -580,7 +652,7 @@ func TestClosePosition_決済済みポジションは再決済できない(t *te
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	now := epoch
 
 	openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
