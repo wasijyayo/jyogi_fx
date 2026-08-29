@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // TestTick_セッション外は何もしない は design.md §9.10/§9.12
@@ -15,7 +17,11 @@ func TestTick_セッション外は何もしない(t *testing.T) {
 	sessionSvc := NewSessionService(nil, RealClock{}, SessionConfig{})
 	tradeSvc := NewTradeService(nil, RealClock{}, sessionSvc)
 	liquidationSvc := NewLiquidationService(nil, RealClock{}, tradeSvc)
-	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc)
+	claimSvc := NewClaimService(nil, RealClock{}, ClaimConfig{
+		BaseAmount:     decimal.NewFromInt(100),
+		BuffMultiplier: decimal.NewFromFloat(1.5),
+	})
+	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc, claimSvc)
 
 	now := time.Date(2026, 1, 1, 3, 0, 0, 0, jst) // 深夜3時JST。セッション外。
 	if err := tickSvc.Tick(context.Background(), now); err != nil {

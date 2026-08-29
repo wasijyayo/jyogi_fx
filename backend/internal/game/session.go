@@ -55,6 +55,18 @@ func (cfg SessionConfig) IsNewOrderAllowed(now time.Time) bool {
 	return minuteOfDayJST(now) < lastNewOrderMinuteJST
 }
 
+// sessionDateJST は now（JST換算）が属する日付を game_sessions.date の型
+// （pgtype.Date）で返す。GetGameSessionByDate で「本日のセッション行」を引く
+// 呼び出し元（TickService.Tick・ClaimService.Claim）が同じ日付計算を
+// 重複させないための共通ヘルパー。
+func sessionDateJST(now time.Time) pgtype.Date {
+	jstNow := now.In(jst)
+	return pgtype.Date{
+		Time:  time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 0, 0, 0, 0, jst),
+		Valid: true,
+	}
+}
+
 // elapsedTicks は epochAt から now までの経過tick数（1tick=1分）を返す。
 // now が epochAt より前の場合は 0 を返す（クロックのずれ等に対する安全側の挙動）。
 func elapsedTicks(epochAt, now time.Time) int64 {

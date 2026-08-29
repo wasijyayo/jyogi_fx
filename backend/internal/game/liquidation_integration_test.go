@@ -199,7 +199,11 @@ func TestTick_セッション外の時刻を注入しても清算は実行され
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
 	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
-	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc)
+	claimSvc := NewClaimService(pool, RealClock{}, ClaimConfig{
+		BaseAmount:     decimal.NewFromInt(100),
+		BuffMultiplier: decimal.NewFromFloat(1.5),
+	})
+	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc, claimSvc)
 
 	offSession := time.Date(2099, 4, 1, 15, 0, 0, 0, jst) // JST 15:00。セッション（12-13時）外。
 	if err := tickSvc.Tick(ctx, offSession); err != nil {
