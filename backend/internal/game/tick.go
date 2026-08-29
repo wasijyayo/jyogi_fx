@@ -161,7 +161,7 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	txq := db.New(tx)
 
 	// 全通貨をループして1トランザクションで書き込む（design.md §11.3。

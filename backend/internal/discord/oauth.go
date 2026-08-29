@@ -95,7 +95,7 @@ func (c OAuthConfig) Exchange(ctx context.Context, code string) (accessToken str
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -126,7 +126,7 @@ func (c OAuthConfig) FetchUser(ctx context.Context, accessToken string) (User, e
 	if err != nil {
 		return User{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
