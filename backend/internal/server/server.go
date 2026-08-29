@@ -12,8 +12,10 @@ import (
 
 // Config は NewMux が必要とする依存をまとめたもの。
 type Config struct {
-	Auth *game.AuthService
-	Tick *game.TickService
+	Auth    *game.AuthService
+	Tick    *game.TickService
+	Ranking *game.RankingService
+	Profile *game.ProfileService
 
 	// SecureCookies が true のとき Cookie に Secure 属性を付ける。
 	// Cloud Run（本番）では true、ローカル開発（http://localhost）では false にする。
