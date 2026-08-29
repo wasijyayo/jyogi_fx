@@ -253,12 +253,14 @@ func TestSlashCommands_操作系(t *testing.T) {
 		BuffMultiplier: decimal.NewFromFloat(1.5),
 	})
 	quoteSvc := game.NewQuoteService(pool, game.RealClock{})
+	profileSvc := game.NewProfileService(pool, game.RealClock{}, rankingSvc)
 	mux := server.NewMux(server.Config{
 		DiscordPublicKey: pub,
 		Ranking:          rankingSvc,
 		Trade:            tradeSvc,
 		Quote:            quoteSvc,
 		Claim:            claimSvc,
+		Profile:          profileSvc,
 		Clock:            fixedClock{now: testNow},
 	})
 
@@ -303,11 +305,14 @@ func TestSlashCommands_操作系(t *testing.T) {
 		if data["custom_id"] != "order_submit:long:JOG" {
 			t.Errorf("modal custom_id = %v, want order_submit:long:JOG", data["custom_id"])
 		}
-		// issue #78: モーダルのタイトルに現在価格を表示する
-		// （「一株何円するのかをモーダル表示したい」というフィードバックへの対応）。
+		// issue #78: モーダルのタイトルに現在価格・自分の残高を表示する
+		// （「一株何円するのか・自身の残高をモーダル表示したい」というフィードバックへの対応）。
 		title, _ := data["title"].(string)
 		if !strings.Contains(title, "円") {
 			t.Errorf("modal title = %q に現在価格が含まれていない", title)
+		}
+		if !strings.Contains(title, "残高") {
+			t.Errorf("modal title = %q に残高が含まれていない", title)
 		}
 	})
 
