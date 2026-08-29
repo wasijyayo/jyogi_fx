@@ -251,7 +251,7 @@ func TestTick_同じtickを2回実行しても壊れない(t *testing.T) {
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 	claimSvc := NewClaimService(pool, RealClock{}, ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),

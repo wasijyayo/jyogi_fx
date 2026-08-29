@@ -56,7 +56,7 @@ func TestTickEndpoint(t *testing.T) {
 
 	const secret = "test-tick-secret"
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
 	claimSvc := game.NewClaimService(pool, game.RealClock{}, game.ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),

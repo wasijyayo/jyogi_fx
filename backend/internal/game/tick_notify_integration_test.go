@@ -344,7 +344,7 @@ func TestTradeService_PlaceOrder_大口取引通知(t *testing.T) {
 	t.Run("閾値を超えたら通知される", func(t *testing.T) {
 		notify, rec := newRecordingNotifyService(t)
 		// 閾値をほぼゼロにして、どんな取引でも「大口」扱いになるようにする。
-		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.NewFromFloat(0.0001))
+		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.NewFromFloat(0.0001), decimal.Zero)
 
 		_, err := tradeSvc.PlaceOrder(ctx, epoch, PlaceOrderParams{
 			UserID: userID, CurrencySymbol: "BIGTRADE", Side: SideLong,
@@ -364,7 +364,7 @@ func TestTradeService_PlaceOrder_大口取引通知(t *testing.T) {
 	t.Run("閾値未満なら通知されない", func(t *testing.T) {
 		notify, rec := newRecordingNotifyService(t)
 		// 現実的にまず届かない閾値にして、普通の注文では通知されないことを確認する。
-		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.NewFromInt(1000))
+		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.NewFromInt(1000), decimal.Zero)
 
 		_, err := tradeSvc.PlaceOrder(ctx, epoch.Add(time.Minute), PlaceOrderParams{
 			UserID: userID, CurrencySymbol: "BIGTRADE", Side: SideLong,
@@ -375,6 +375,98 @@ func TestTradeService_PlaceOrder_大口取引通知(t *testing.T) {
 		}
 		if len(rec.posts) != 0 {
 			t.Fatalf("posts = %d件, want 0（閾値未満）: %v", len(rec.posts), rec.posts)
+		}
+	})
+}
+
+// TestTradeService_ClosePosition_利益確定通知 は #82 の利益確定通知が、
+// 閾値pips以上の「利益」でだけ発火し、閾値未満や損失方向（値動き幅は大きくても
+// 利益ではない）では発火しないことを確認する。
+func TestTradeService_ClosePosition_利益確定通知(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	epoch := time.Date(2099, 4, 15, 12, 0, 0, 0, jst)
+	c := insertTestCurrency(t, ctx, pool, "PROFITNOTIFY", 777005, epoch)
+
+	userID := "test-profit-notify-user"
+	_, _ = pool.Exec(ctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+	setupTradeTestUser(t, ctx, q, userID, decimal.NewFromInt(1000))
+
+	t.Cleanup(func() {
+		cctx := context.Background()
+		_, _ = pool.Exec(cctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+		_, _ = pool.Exec(cctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+	})
+
+	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
+
+	// TestClosePosition_損益が計算され残高と圧力に反映されるのpressureOverrideと同じ手法。
+	// 建玉直後に圧力を直接上書きすることで決済価格（=建値×(1+override)）を制御する。
+	overridePressureAndClose := func(t *testing.T, tradeSvc *TradeService, now time.Time, pressure decimal.Decimal) {
+		t.Helper()
+		openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
+			UserID: userID, CurrencySymbol: "PROFITNOTIFY", Side: SideLong,
+			Size: decimal.NewFromInt(1), Leverage: decimal.NewFromInt(1),
+		})
+		if err != nil {
+			t.Fatalf("PlaceOrder: %v", err)
+		}
+		if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
+			ID: c.ID, Pressure: pressure, PressureAt: pgtype.Timestamptz{Time: now, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpdateCurrencyPressure: %v", err)
+		}
+		if _, err := tradeSvc.ClosePosition(ctx, now, ClosePositionParams{
+			UserID: userID, PositionID: openResult.Position.ID,
+		}); err != nil {
+			t.Fatalf("ClosePosition: %v", err)
+		}
+	}
+
+	t.Run("200pips以上の利益なら通知される", func(t *testing.T) {
+		notify, rec := newRecordingNotifyService(t)
+		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.Zero, decimal.NewFromInt(200))
+
+		// ロング+3%（建値100→約103、300pips）で閾値200pipsを超える。
+		overridePressureAndClose(t, tradeSvc, epoch, decimal.NewFromFloat(0.03))
+
+		if len(rec.posts) != 1 {
+			t.Fatalf("posts = %d件, want 1", len(rec.posts))
+		}
+		if !strings.Contains(rec.posts[0], userID) || !strings.Contains(rec.posts[0], "PROFITNOTIFY") || !strings.Contains(rec.posts[0], "pips") {
+			t.Errorf("content = %q", rec.posts[0])
+		}
+	})
+
+	t.Run("閾値未満なら通知されない", func(t *testing.T) {
+		notify, rec := newRecordingNotifyService(t)
+		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.Zero, decimal.NewFromInt(200))
+
+		// ロング+0.5%（約50pips）で閾値200pipsに届かない。
+		overridePressureAndClose(t, tradeSvc, epoch.Add(time.Minute), decimal.NewFromFloat(0.005))
+
+		if len(rec.posts) != 0 {
+			t.Fatalf("posts = %d件, want 0（閾値未満）: %v", len(rec.posts), rec.posts)
+		}
+	})
+
+	t.Run("損失方向なら値動き幅が大きくても通知されない", func(t *testing.T) {
+		notify, rec := newRecordingNotifyService(t)
+		tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, notify, decimal.Zero, decimal.NewFromInt(200))
+
+		// ロング-5%（約-500pips）。値動き幅は閾値を大きく超えるが、ロングにとっては
+		// 損失方向なので通知されないはず。
+		overridePressureAndClose(t, tradeSvc, epoch.Add(2*time.Minute), decimal.NewFromFloat(-0.05))
+
+		if len(rec.posts) != 0 {
+			t.Fatalf("posts = %d件, want 0（損失方向）: %v", len(rec.posts), rec.posts)
 		}
 	})
 }

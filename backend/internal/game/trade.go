@@ -28,6 +28,21 @@ func PositionPnL(p db.Position, currentPrice decimal.Decimal) decimal.Decimal {
 	return priceDiff.Mul(p.Size)
 }
 
+// pipDivisor は pips 換算の基準値（design.md §2.8「pips = (close-open)/0.01」）。
+// SessionGap.pips()（notify.go）と PositionPnLPips（本ファイル）で共有する。
+var pipDivisor = decimal.NewFromFloat(0.01)
+
+// PositionPnLPips は position の建値から currentPrice までの値動きをpips換算した値
+// （design.md §2.8のpips定義と同じ式）。PositionPnLと違いsizeを掛けないため、
+// ポジションサイズによらない値動き幅そのものを表す。利益確定通知（#82）が使う。
+func PositionPnLPips(p db.Position, currentPrice decimal.Decimal) decimal.Decimal {
+	priceDiff := currentPrice.Sub(p.EntryPrice)
+	if Side(p.Side) == SideShort {
+		priceDiff = priceDiff.Neg()
+	}
+	return priceDiff.Div(pipDivisor)
+}
+
 // Side は注文・ポジションの売買方向。positions.side / trades.side の値と一致させる
 // （design.md §8: side TEXT NOT NULL, -- long / short）。
 // long = 買い注文、short = 売り注文（design.md §2.2）。
@@ -101,10 +116,21 @@ type TradeService struct {
 	// 定義が無かったためユーザーに確認して決定した（main.goのLARGE_TRADE_IMPACT_PERCENT
 	// 環境変数で上書き可能）。ゼロ以下なら大口取引通知自体を行わない。
 	largeTradeThresholdPercent decimal.Decimal
+	// profitPipsThreshold はこの値（pips）以上の利益を出した決済を「利益確定」として
+	// 通知する閾値（#82。design.mdに定義は無く、ユーザーからの追加要望で実装した。
+	// main.goのPROFIT_PIPS_THRESHOLD環境変数で上書き可能）。ゼロ以下なら通知しない。
+	profitPipsThreshold decimal.Decimal
 }
 
-func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, notify *NotifyService, largeTradeThresholdPercent decimal.Decimal) *TradeService {
-	return &TradeService{pool: pool, clock: clock, session: session, notify: notify, largeTradeThresholdPercent: largeTradeThresholdPercent}
+func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, notify *NotifyService, largeTradeThresholdPercent, profitPipsThreshold decimal.Decimal) *TradeService {
+	return &TradeService{
+		pool:                       pool,
+		clock:                      clock,
+		session:                    session,
+		notify:                     notify,
+		largeTradeThresholdPercent: largeTradeThresholdPercent,
+		profitPipsThreshold:        profitPipsThreshold,
+	}
 }
 
 // PlaceOrder は成行注文で新規建玉を作成する（#36 TRADE-1。design.md §7.0/§7.3/§2.2）。
@@ -419,6 +445,10 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 		return ClosePositionResult{}, fmt.Errorf("commit tx: %w", err)
 	}
 
+	// 利益確定通知（#82）。コミット後のベストエフォートで、失敗しても決済自体は
+	// 成立済みなのでエラーにはしない（maybeNotifyLargeTradeと同じ方針）。
+	s.maybeNotifyProfitTrade(ctx, user.DisplayName, currency.Symbol, side, PositionPnLPips(position, exitPrice))
+
 	return ClosePositionResult{Position: closedPosition, Trade: trade, NewBalance: newBalance}, nil
 }
 
@@ -436,5 +466,20 @@ func (s *TradeService) maybeNotifyLargeTrade(ctx context.Context, displayName, s
 	}
 	if err := s.notify.LargeTrade(ctx, displayName, symbol, side, impactPercent); err != nil {
 		log.Printf("large trade notify: %v", err)
+	}
+}
+
+// maybeNotifyProfitTrade は利益確定通知（#82）の閾値判定。pipsは負値（損失）にも
+// なりうるが、profitPipsThreshold は正の値である前提のため、損失方向は自然に
+// 素通しされる（Abs()を取らない）。ClosePosition内でtx.Commit後に呼ぶ想定。
+func (s *TradeService) maybeNotifyProfitTrade(ctx context.Context, displayName, symbol string, side Side, pips decimal.Decimal) {
+	if s.notify == nil || !s.profitPipsThreshold.IsPositive() {
+		return
+	}
+	if pips.LessThan(s.profitPipsThreshold) {
+		return
+	}
+	if err := s.notify.ProfitTrade(ctx, displayName, symbol, side, pips.Round(0).IntPart()); err != nil {
+		log.Printf("profit trade notify: %v", err)
 	}
 }

@@ -59,7 +59,7 @@ func TestPlaceOrder_成行注文で残高が減りポジションが作られ価
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 
 	// epoch と同時刻なので tickIndex=0 → BasePrice は base_price(=100) のまま動かない。
 	// pressure も投入直後は0なので、約定価格はちょうど100になるはず
@@ -178,7 +178,7 @@ func TestPlaceOrder_売り注文は圧力を下げ名目金額に応じた証拠
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 
 	now := epoch
 	size := decimal.NewFromInt(30)
@@ -253,7 +253,7 @@ func TestPlaceOrder_拒否された注文は残高もポジションも変化し
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 	now := epoch
 
 	tests := []struct {
@@ -327,7 +327,7 @@ func TestClosePosition_損益が計算され残高と圧力に反映される(t 
 	q := db.New(pool)
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 
 	tests := []struct {
 		name             string
@@ -487,7 +487,7 @@ func TestClosePosition_他人のポジションは決済できない(t *testing.
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 	now := epoch
 
 	openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
@@ -544,7 +544,7 @@ func TestClosePosition_存在しないポジションはエラーになる(t *te
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 
 	_, err := tradeSvc.ClosePosition(context.Background(), time.Now(), ClosePositionParams{
 		UserID: userID, PositionID: 999999999,
@@ -580,7 +580,7 @@ func TestClosePosition_決済済みポジションは再決済できない(t *te
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
 	now := epoch
 
 	openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{

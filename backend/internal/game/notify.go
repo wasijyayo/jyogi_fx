@@ -61,6 +61,19 @@ func (n *NotifyService) LargeTrade(ctx context.Context, displayName, symbol stri
 	return n.post(ctx, content)
 }
 
+// ProfitTrade は利益確定通知（#82。ユーザーからの追加要望で、design.mdに元々の
+// 定義は無い）。1回の決済で一定pips以上の利益を出した場合に投稿する。閾値判定は
+// 呼び出し元 TradeService.ClosePosition が行う（LargeTradeと同じ役割分担）。
+func (n *NotifyService) ProfitTrade(ctx context.Context, displayName, symbol string, side Side, pips int64) error {
+	sideLabel := "ロング"
+	if side == SideShort {
+		sideLabel = "ショート"
+	}
+	content := fmt.Sprintf("🤑 %s が %s の%sで +%dpips の利益を確定させました！",
+		displayName, symbol, sideLabel, pips)
+	return n.post(ctx, content)
+}
+
 // roastTemplates は強制ロスカット時のいじりテンプレ（design.md §6.8「ロスカットの
 // 演出」。テンプレをランダム化して飽きを防ぐ）。%s は表示名・通貨シンボル・
 // レバレッジの順。
@@ -187,8 +200,9 @@ func (g SessionGap) isLarge() bool {
 }
 
 // pips は design.md §2.8「pips = (close-open)/0.01、整数に丸め」。
+// pipDivisor（trade.go）を PositionPnLPips と共有する。
 func (g SessionGap) pips() int64 {
-	return g.Close.Sub(g.Open).Div(decimal.NewFromFloat(0.01)).Round(0).IntPart()
+	return g.Close.Sub(g.Open).Div(pipDivisor).Round(0).IntPart()
 }
 
 // SessionOpen はセッション開始通知（design.md §2.8「セッション開始通知」。

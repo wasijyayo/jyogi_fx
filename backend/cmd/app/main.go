@@ -123,12 +123,20 @@ func runServe() error {
 		return fmt.Errorf("LARGE_TRADE_IMPACT_PERCENT: %w", err)
 	}
 
+	// 利益確定通知（#82）の閾値（pips）。design.mdに定義が無く、ユーザーからの
+	// 追加要望（デフォルト200pips）で実装した値。LARGE_TRADE_IMPACT_PERCENTと同じく
+	// デプロイなしで調整できるよう環境変数で上書き可能にする。
+	profitPipsThreshold, err := decimalEnv("PROFIT_PIPS_THRESHOLD", "200")
+	if err != nil {
+		return fmt.Errorf("PROFIT_PIPS_THRESHOLD: %w", err)
+	}
+
 	// GAME_ALWAYS_OPEN=true で開発環境の「取引時間が常に開いている」モードを有効化する
 	// （CLAUDE.md §5.1）。本番では未設定のままにすること。
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{
 		AlwaysOpen: os.Getenv("GAME_ALWAYS_OPEN") == "true",
 	})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, notifySvc, largeTradeThresholdPercent)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, notifySvc, largeTradeThresholdPercent, profitPipsThreshold)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
 
 	// CLAIM_BASE_AMOUNT・CLAIM_MEDIAN_BUFF_MULTIPLIER はデプロイなしで調整できる
