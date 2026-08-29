@@ -4,3 +4,20 @@
 INSERT INTO positions (user_id, currency_id, side, size, entry_price, leverage, opened_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
+
+-- name: GetPositionForUpdate :one
+-- 決済処理でポジションを読み書きする前に行ロックを取る（同時決済によるlost updateを防ぐ。
+-- #37 TRADE-2）。user_id も条件に含めることで、「存在しない」場合と「他人のポジション」の
+-- 場合を区別せず ErrPositionNotFound 1つにまとめられるようにする（他人のポジションIDの
+-- 存在有無を呼び出し元に漏らさないため）。呼び出し側は必ずトランザクション内で使うこと。
+SELECT * FROM positions
+WHERE id = $1 AND user_id = $2
+FOR UPDATE;
+
+-- name: ClosePosition :one
+-- 決済によりポジションを確定させる（#37 TRADE-2。design.md §8）。closed_at と pnl を
+-- セットする。size / entry_price / leverage は建玉時点の記録として書き換えない。
+UPDATE positions
+SET closed_at = $2, pnl = $3
+WHERE id = $1
+RETURNING *;

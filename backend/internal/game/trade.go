@@ -43,6 +43,13 @@ var (
 	ErrCurrencyNotFound = errors.New("currency not found")
 	// ErrInsufficientBalance は必要証拠金+手数料に対して残高が不足している場合に返る。
 	ErrInsufficientBalance = errors.New("insufficient balance for required margin and fee")
+	// ErrPositionNotFound は該当ポジションが存在しない、または指定したユーザーの
+	// ものでない場合に返る（他人のポジションIDの存在有無を漏らさないため、
+	// この2つを区別しない。GetPositionForUpdate のコメント参照）。
+	ErrPositionNotFound = errors.New("position not found")
+	// ErrPositionAlreadyClosed はすでに決済済み（closed_at が設定済み）のポジションを
+	// 再度決済しようとした場合に返る。
+	ErrPositionAlreadyClosed = errors.New("position already closed")
 )
 
 // PlaceOrderParams は成行注文（新規建玉）の入力。
@@ -213,4 +220,160 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 	}
 
 	return PlaceOrderResult{Position: position, Trade: trade, NewBalance: newBalance}, nil
+}
+
+// ClosePositionParams は決済（クローズ）の入力。
+type ClosePositionParams struct {
+	UserID     string
+	PositionID int64
+}
+
+// ClosePositionResult は決済成功時の結果。
+type ClosePositionResult struct {
+	Position   db.Position
+	Trade      db.Trade
+	NewBalance decimal.Decimal
+}
+
+// ClosePosition は既存ポジションを決済し、損益を確定する（#37 TRADE-2。
+// design.md §7.3/§2.2/§7.9）。
+//
+// 手順:
+//  1. ポジションをユーザーIDで絞ってロック取得する（他人のポジションは
+//     ErrPositionNotFound。すでに決済済みなら ErrPositionAlreadyClosed）
+//  2. ユーザー・通貨の行をロックして取得する（PlaceOrderと同じくユーザー→通貨の順。
+//     デッドロック回避のため全呼び出しでこの順序を固定する）
+//  3. 決済価格（今の表示価格）を算出する
+//  4. side に応じた損益を計算する（long: (決済価格-建値)×size、short: (建値-決済価格)×size）
+//  5. 手数料を計算する（建玉時と同じ片道0.05%。名目金額は決済価格基準。往復で計2回徴収される
+//     ことになる。design.md §7.3）
+//  6. 残高 += 証拠金（建玉時にロックした分）+ 損益 - 手数料
+//  7. positions.closed_at/pnl を更新し、trades 行を作成する（反対売買として記録する。
+//     side は建玉と逆にする）
+//  8. 反対売買としての需給圧力インパクトを反映する（#33 UpdatePressure。design.md §2.2）
+//
+// セッション時間による制限はしない。既存ポジションの決済はセッション外・
+// 終了1分前（12:59台）を含め常に許可する（確定#48。design.md §7.9）。
+// PlaceOrder の IsNewOrderAllowed をここで使い回さないこと。
+//
+// 必ず1トランザクションで囲む（dev-guide.md §3）。
+func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p ClosePositionParams) (ClosePositionResult, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ClosePositionResult{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	q := db.New(tx)
+
+	// ポジション→ユーザー→通貨の順でロックを取得する。position は既存行のIDで
+	// 一意に決まるためこの順序自体が循環を生むことはなく、user→currencyの部分は
+	// PlaceOrderと同じ順序を保っている（デッドロック回避）。
+	position, err := q.GetPositionForUpdate(ctx, db.GetPositionForUpdateParams{
+		ID:     p.PositionID,
+		UserID: p.UserID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClosePositionResult{}, ErrPositionNotFound
+		}
+		return ClosePositionResult{}, fmt.Errorf("get position: %w", err)
+	}
+	if position.ClosedAt.Valid {
+		return ClosePositionResult{}, ErrPositionAlreadyClosed
+	}
+
+	user, err := q.GetUserForUpdate(ctx, p.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClosePositionResult{}, ErrUserNotFound
+		}
+		return ClosePositionResult{}, fmt.Errorf("get user: %w", err)
+	}
+
+	currency, err := q.GetCurrencyByIDForUpdate(ctx, position.CurrencyID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClosePositionResult{}, ErrCurrencyNotFound
+		}
+		return ClosePositionResult{}, fmt.Errorf("get currency: %w", err)
+	}
+
+	// 決済価格 = この決済が入る直前の表示価格。エントリー時（PlaceOrder）と同じ考え方で、
+	// この決済自身の需給圧力インパクトは含めない（手順8で別途反映する）。
+	tickIndex := elapsedTicks(currency.EpochAt.Time, now)
+	exitPrice := CurrentPrice(currency, tickIndex, now)
+
+	side := Side(position.Side)
+	priceDiff := exitPrice.Sub(position.EntryPrice)
+	if side == SideShort {
+		priceDiff = priceDiff.Neg()
+	}
+	pnl := priceDiff.Mul(position.Size)
+
+	// 建玉時にロックした証拠金 = size × entry_price / leverage（PlaceOrderの計算そのまま）。
+	// 決済では損益とは独立にこの分を残高へ戻す。
+	requiredMargin := position.Size.Mul(position.EntryPrice).Div(position.Leverage)
+
+	// 手数料は決済価格基準の名目金額に対して片道0.05%（PlaceOrderと同じ計算。design.md §7.3）。
+	notional := position.Size.Mul(exitPrice)
+	fee := notional.Mul(currency.FeeRate)
+
+	newBalance := user.Balance.Add(requiredMargin).Add(pnl).Sub(fee)
+	if err := q.UpdateUserBalance(ctx, db.UpdateUserBalanceParams{
+		DiscordID: user.DiscordID,
+		Balance:   newBalance,
+	}); err != nil {
+		return ClosePositionResult{}, fmt.Errorf("update user balance: %w", err)
+	}
+
+	closedPosition, err := q.ClosePosition(ctx, db.ClosePositionParams{
+		ID:       position.ID,
+		ClosedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		Pnl:      decimal.NullDecimal{Decimal: pnl, Valid: true},
+	})
+	if err != nil {
+		return ClosePositionResult{}, fmt.Errorf("close position: %w", err)
+	}
+
+	// 決済は反対売買として記録する（long建玉の決済 = 売り、short建玉の決済 = 買い。
+	// issueの「決済も需給圧力を動かす（反対売買のため）」に対応）。
+	closeSide := SideShort
+	if side == SideShort {
+		closeSide = SideLong
+	}
+	trade, err := q.CreateTrade(ctx, db.CreateTradeParams{
+		UserID:     user.DiscordID,
+		CurrencyID: currency.ID,
+		PositionID: pgtype.Int8{Int64: position.ID, Valid: true},
+		Side:       string(closeSide),
+		Size:       position.Size,
+		Price:      exitPrice,
+		Fee:        fee,
+		CreatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		return ClosePositionResult{}, fmt.Errorf("create trade: %w", err)
+	}
+
+	// 反対売買としての需給圧力インパクトを反映する（design.md §2.2）。
+	// 符号の向きはPlaceOrderと同じ規約（買い=正、売り=負）で、この決済自体の
+	// side（closeSide）を基準にする。
+	signedVolume := notional
+	if closeSide == SideShort {
+		signedVolume = notional.Neg()
+	}
+	newPressure := UpdatePressure(currency, now, signedVolume, currency.Liquidity)
+	if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
+		ID:         currency.ID,
+		Pressure:   newPressure,
+		PressureAt: pgtype.Timestamptz{Time: now, Valid: true},
+	}); err != nil {
+		return ClosePositionResult{}, fmt.Errorf("update currency pressure: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ClosePositionResult{}, fmt.Errorf("commit tx: %w", err)
+	}
+
+	return ClosePositionResult{Position: closedPosition, Trade: trade, NewBalance: newBalance}, nil
 }
