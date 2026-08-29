@@ -384,7 +384,7 @@ func handleMessageComponent(ctx context.Context, cfg Config, req interactionRequ
 
 	switch parts[0] {
 	case discord.CustomIDOrderButton:
-		return handleOrderButton(ctx, cfg, now, parts)
+		return handleOrderButton(ctx, cfg, req, now, parts)
 	case customIDClose:
 		return channelMessage(handleCloseButton(parts))
 	case customIDCloseConfirm:
@@ -407,12 +407,12 @@ func channelMessage(data interactionResponseData) interactionResponse {
 // 数量（・レバレッジ）はモーダルで入力させる（design.md §6.3）ため、
 // ここでは発注せずモーダルを開く応答を返すだけ。
 //
-// モーダルのタイトルに現在価格を入れる（issue #78のユーザーフィードバック
-// 「一株何円するのかをモーダル表示したい」への対応）。Discordのモーダルは
-// 入力内容に応じて動的に表示を再計算する仕組みが無いため、「レバレッジをかけた後の
-// 残額」のような入力依存の値は表示できない。現在価格は入力に依存しないため
-// タイトルに含められる。
-func handleOrderButton(ctx context.Context, cfg Config, now time.Time, parts []string) any {
+// モーダルのタイトルに現在価格・自分の残高を入れる（issue #78のユーザー
+// フィードバック「一株何円するのか・自身の残高をモーダル表示したい」への対応）。
+// Discordのモーダルは入力内容に応じて動的に表示を再計算する仕組みが無いため、
+// 「レバレッジをかけた後の残額」のような入力（数量・レバレッジ）に依存する値は
+// 表示できない。現在価格・現在の残高はどちらも入力に依存しないためタイトルに含められる。
+func handleOrderButton(ctx context.Context, cfg Config, req interactionRequest, now time.Time, parts []string) any {
 	if len(parts) != 3 {
 		return channelMessage(errorCommandResponse("不明な操作です。"))
 	}
@@ -422,12 +422,28 @@ func handleOrderButton(ctx context.Context, cfg Config, now time.Time, parts []s
 		label = "売る"
 	}
 
-	title := fmt.Sprintf("%sを%s", symbol, label)
+	// 現在価格・残高のどちらも取得できなければ丸括弧ごと省略する。片方だけ取得できた
+	// 場合はもう片方だけを表示する（発注フロー自体はどちらの取得失敗でも止めない）。
+	var info []string
 	if quote, err := cfg.Quote.Quote(ctx, now, symbol); err == nil {
-		title = fmt.Sprintf("%sを%s（現在%s円）", symbol, label, formatAmount(quote.CurrentPrice))
+		info = append(info, fmt.Sprintf("現在%s円", formatAmount(quote.CurrentPrice)))
 	} else {
-		// 価格取得に失敗しても発注フロー自体は止めない。価格なしのタイトルで続行する。
 		log.Printf("order button: quote for title: %v", err)
+	}
+	if userID, ok := interactionUserID(req); ok && cfg.Profile != nil {
+		if balance, err := cfg.Profile.Balance(ctx, userID); err == nil {
+			info = append(info, fmt.Sprintf("残高%s", formatAmount(balance.Balance)))
+		} else if !errors.Is(err, game.ErrUserNotFound) {
+			// 未登録ユーザー（ErrUserNotFound）は「先にWebでログイン」を促す他コマンドと
+			// 同じ状況で、モーダル自体は開いて構わない（発注時に改めてエラーになる）ため
+			// ログしない。それ以外の予期しない失敗のみログする。
+			log.Printf("order button: balance for title: %v", err)
+		}
+	}
+
+	title := fmt.Sprintf("%sを%s", symbol, label)
+	if len(info) > 0 {
+		title = fmt.Sprintf("%sを%s（%s）", symbol, label, strings.Join(info, "・"))
 	}
 
 	return interactionModalResponse{
