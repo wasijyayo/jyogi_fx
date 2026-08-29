@@ -90,8 +90,12 @@ func (s *LiquidationService) LiquidateOpenPositions(ctx context.Context, now tim
 		// （反対売買のpressureインパクトで通貨内の後続ポジションの実勢価格は
 		// 微妙にずれていく）、ここでの currentPrice は「このtickでどのポジションを
 		// 清算対象とするか」を判定するためのスナップショットに過ぎない。
+		events, err := q.ListEventsByCurrency(ctx, c.ID)
+		if err != nil {
+			return liquidated, fmt.Errorf("list events for %s: %w", c.Symbol, err)
+		}
 		tickIndex := elapsedTicks(c.EpochAt.Time, now)
-		currentPrice := CurrentPrice(c, tickIndex, now)
+		currentPrice := CurrentPrice(c, tickIndex, now, events)
 
 		for _, p := range positions {
 			if !ShouldLiquidate(p, currentPrice) {

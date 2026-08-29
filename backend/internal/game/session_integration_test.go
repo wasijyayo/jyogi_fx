@@ -68,6 +68,9 @@ func TestOpenSession(t *testing.T) {
 
 	t.Cleanup(func() {
 		cctx := context.Background()
+		// events は game_sessions への外部キーを持つため（#40 EVENT-1で追加）、
+		// game_sessions を消す前に先に消す。price_ticksと同じ理由（#55の教訓）。
+		_, _ = pool.Exec(cctx, `DELETE FROM events WHERE session_id = $1`, session.ID)
 		_, _ = pool.Exec(cctx, `DELETE FROM price_ticks WHERE session_id = $1`, session.ID)
 		_, _ = pool.Exec(cctx, `DELETE FROM game_sessions WHERE id = $1`, session.ID)
 		for _, c := range before {

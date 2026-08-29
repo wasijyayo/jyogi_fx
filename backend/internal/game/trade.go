@@ -150,8 +150,12 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 	// 約定価格 = この注文が入る直前の表示価格（design.md §2.1）。
 	// 自分自身の注文による圧力インパクトは、約定後に別途反映する（手順8）ため
 	// ここでは含めない（＝自分の注文で自分の約定価格が動くことはない）。
+	events, err := q.ListEventsByCurrency(ctx, currency.ID)
+	if err != nil {
+		return PlaceOrderResult{}, fmt.Errorf("list events: %w", err)
+	}
 	tickIndex := elapsedTicks(currency.EpochAt.Time, now)
-	entryPrice := CurrentPrice(currency, tickIndex, now)
+	entryPrice := CurrentPrice(currency, tickIndex, now, events)
 
 	// 名目金額（＝この注文が動かす経済的な大きさ）= 数量 × 約定価格。
 	// 必要証拠金・手数料・需給圧力インパクト（手順8）は全てこれを基準に計算する。
@@ -206,7 +210,11 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 	if p.Side == SideShort {
 		signedVolume = notional.Neg()
 	}
-	newPressure := UpdatePressure(currency, now, signedVolume, currency.Liquidity)
+	// liquidity_drainイベント中は流動性が枯渇し、同じ取引量でも価格インパクトが
+	// 約3.3倍（1/0.3）になる（design.md §5.4）。base(n)には触れず、ここで
+	// UpdatePressureに渡すliquidityだけを差し替える。
+	liquidity := currency.Liquidity.Mul(liquidityMultiplierAt(events, tickIndex))
+	newPressure := UpdatePressure(currency, now, signedVolume, liquidity)
 	if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
 		ID:         currency.ID,
 		Pressure:   newPressure,
@@ -300,8 +308,12 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 
 	// 決済価格 = この決済が入る直前の表示価格。エントリー時（PlaceOrder）と同じ考え方で、
 	// この決済自身の需給圧力インパクトは含めない（手順8で別途反映する）。
+	events, err := q.ListEventsByCurrency(ctx, currency.ID)
+	if err != nil {
+		return ClosePositionResult{}, fmt.Errorf("list events: %w", err)
+	}
 	tickIndex := elapsedTicks(currency.EpochAt.Time, now)
-	exitPrice := CurrentPrice(currency, tickIndex, now)
+	exitPrice := CurrentPrice(currency, tickIndex, now, events)
 
 	side := Side(position.Side)
 	priceDiff := exitPrice.Sub(position.EntryPrice)
@@ -362,7 +374,9 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 	if closeSide == SideShort {
 		signedVolume = notional.Neg()
 	}
-	newPressure := UpdatePressure(currency, now, signedVolume, currency.Liquidity)
+	// liquidity_drain中は流動性差し替え（PlaceOrderと同じ考え方。design.md §5.4）。
+	liquidity := currency.Liquidity.Mul(liquidityMultiplierAt(events, tickIndex))
+	newPressure := UpdatePressure(currency, now, signedVolume, liquidity)
 	if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
 		ID:         currency.ID,
 		Pressure:   newPressure,

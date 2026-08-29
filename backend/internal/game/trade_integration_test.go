@@ -146,7 +146,7 @@ func TestPlaceOrder_成行注文で残高が減りポジションが作られ価
 		t.Errorf("pressure = %s, want %s (k×名目金額/liquidity)", gotCurrency.Pressure, wantPressure)
 	}
 
-	priceAfter := CurrentPrice(gotCurrency, elapsedTicks(gotCurrency.EpochAt.Time, now), now)
+	priceAfter := CurrentPrice(gotCurrency, elapsedTicks(gotCurrency.EpochAt.Time, now), now, nil)
 	if !priceAfter.GreaterThan(result.Trade.Price) {
 		t.Errorf("買い注文後の価格 %s が約定価格 %s 以下だった（価格が動いていない）", priceAfter, result.Trade.Price)
 	}
@@ -215,7 +215,7 @@ func TestPlaceOrder_売り注文は圧力を下げ名目金額に応じた証拠
 		t.Errorf("売り注文後のpressure = %s, want 負の値", gotCurrency.Pressure)
 	}
 
-	priceAfter := CurrentPrice(gotCurrency, elapsedTicks(gotCurrency.EpochAt.Time, now), now)
+	priceAfter := CurrentPrice(gotCurrency, elapsedTicks(gotCurrency.EpochAt.Time, now), now, nil)
 	if !priceAfter.LessThan(result.Trade.Price) {
 		t.Errorf("売り注文後の価格 %s が約定価格 %s 以上だった（価格が動いていない）", priceAfter, result.Trade.Price)
 	}

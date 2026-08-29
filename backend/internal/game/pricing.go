@@ -73,21 +73,29 @@ func scaleAt(epochOffsetMinutes, tick int64, offSessionScale decimal.Decimal) de
 	return offSessionScale
 }
 
-// BasePrice は docs/design.md §2.1/§2.7 の基準価格 base(n) を返す純粋関数。
+// BasePrice は docs/design.md §2.1/§2.7/§5.4 の基準価格 base(n) を返す純粋関数。
 //
-//	base(n) = base₀ × exp( Σ_{i=1}^{n} volatility × scale(i) × z(seed, i) )
+//	base(n) = base₀
+//	    × exp( Σ_{i=1}^{n} volatility × scale(i) × volMul(i) × z(seed, i) )
+//	    × Π_{shock発火済み}(1 + magnitude)
 //
-// tickIndex（＝currencyの epoch_at からの通算tick番号）のみに依存し、
-// 呼び出し順序に依存しない。同じ (currency, tickIndex) には常に同じ値を返す。
+// tickIndex（＝currencyの epoch_at からの通算tick番号）と events のみに依存し、
+// 呼び出し順序に依存しない。同じ (currency, tickIndex, events) には常に同じ値を返す
+// （#40完了条件「イベント込みでもbase(n)が純粋関数のままであること」）。
 //
-// イベント（shock）による乗算項は §5.4 のとおり別の乗算項として扱う（#40 で追加）。
-// ここでは §2.1 の基本式（乱数由来の基準価格）のみを実装する。
+// events は呼び出し側が対象通貨（c.ID）1件分に絞り込んで渡すこと
+// （ListEventsByCurrencyの結果をそのまま渡す想定。event.goのshockMultiplier/
+// volatilityMultiplierAtのコメント参照）。vol_up はΣの各項へのボラティリティ倍率
+// として、shockはΣ計算後の別の乗算項として反映する（design.md §5.4で明確に
+// 区別されている：vol_upは「一定期間の増幅」でΣの中身そのものが変わるが、
+// shockは「瞬間ジャンプ」でΣの外側から一撃で掛かる）。liquidity_drainはここでは
+// 一切参照しない（base(n)には触れず、pressure更新側でのみ扱う。§5.4）。
 //
 // 内部の総和・exp 計算は float64 で行う。CLAUDE.md §5.2 の「金額に float 禁止」は
 // 残高・価格そのものの型に対する制約であり、exp/log/cos を要する乱数生成の内部計算は
 // decimal.Decimal では表現できない（shopspring/decimal は超越関数を持たない）。
 // 最終結果を decimal.Decimal に変換して返すことで、外部に見える価格の型は守る。
-func BasePrice(c db.Currency, tickIndex int64) decimal.Decimal {
+func BasePrice(c db.Currency, tickIndex int64, events []db.Event) decimal.Decimal {
 	if tickIndex <= 0 {
 		return c.BasePrice
 	}
@@ -103,8 +111,8 @@ func BasePrice(c db.Currency, tickIndex int64) decimal.Decimal {
 		if isInSession(epochOffset, i) {
 			scale = 1
 		}
-		sum += volatility * scale * zAt(seed, i)
+		sum += volatility * scale * volatilityMultiplierAt(events, i) * zAt(seed, i)
 	}
 
-	return c.BasePrice.Mul(decimal.NewFromFloat(math.Exp(sum)))
+	return c.BasePrice.Mul(decimal.NewFromFloat(math.Exp(sum))).Mul(shockMultiplier(events, tickIndex))
 }

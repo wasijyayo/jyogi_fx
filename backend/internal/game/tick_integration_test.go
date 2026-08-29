@@ -237,6 +237,9 @@ func TestTick_同じtickを2回実行しても壊れない(t *testing.T) {
 	t.Cleanup(func() {
 		cctx := context.Background()
 		if s, err := q.GetGameSessionByDate(cctx, sessionDate); err == nil {
+			// events は game_sessions への外部キーを持つため（#40 EVENT-1で追加）、
+			// game_sessions を消す前に先に消す（#55と同じ理由）。
+			_, _ = pool.Exec(cctx, `DELETE FROM events WHERE session_id = $1`, s.ID)
 			_, _ = pool.Exec(cctx, `DELETE FROM price_ticks WHERE session_id = $1`, s.ID)
 			_, _ = pool.Exec(cctx, `DELETE FROM game_sessions WHERE id = $1`, s.ID)
 		}

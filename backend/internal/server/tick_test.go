@@ -42,6 +42,11 @@ func TestTickEndpoint(t *testing.T) {
 	if dbReachable {
 		t.Cleanup(func() {
 			cctx := context.Background()
+			// events も game_sessions への外部キーを持つため（#40 EVENT-1で追加）、
+			// 先に消しておく（#55と同じ理由。本来この安全策が発動すること自体
+			// 想定していないが、発動時に外部キー制約で後始末が失敗しないようにする）。
+			_, _ = pool.Exec(cctx, `DELETE FROM events WHERE session_id IN
+				(SELECT id FROM game_sessions WHERE date = '2026-01-02')`)
 			_, _ = pool.Exec(cctx, `DELETE FROM price_ticks WHERE session_id IN
 				(SELECT id FROM game_sessions WHERE date = '2026-01-02')`)
 			_, _ = pool.Exec(cctx, `DELETE FROM game_sessions WHERE date = '2026-01-02'`)
