@@ -13,6 +13,7 @@ import (
 // Config は NewMux が必要とする依存をまとめたもの。
 type Config struct {
 	Auth *game.AuthService
+	Tick *game.TickService
 
 	// SecureCookies が true のとき Cookie に Secure 属性を付ける。
 	// Cloud Run（本番）では true、ローカル開発（http://localhost）では false にする。
@@ -22,8 +23,13 @@ type Config struct {
 	// 未設定の場合、/interactions は 500 を返す（設定ミスと署名偽造を区別するため）。
 	DiscordPublicKey ed25519.PublicKey
 
-	// Clock は署名タイムスタンプの鮮度検査に使う（CLAUDE.md §5.1: 時刻は必ず注入する）。
-	// 未設定なら RealClock を使う。
+	// TickSharedSecret は /internal/tick の保護に使う共有シークレット（design.md §4）。
+	// 外部から叩かれるとイベントが暴発するため必須。呼び出し側は
+	// `Authorization: Bearer <secret>` ヘッダを付ける。
+	TickSharedSecret string
+
+	// Clock は署名タイムスタンプの鮮度検査・tick処理の現在時刻に使う
+	// （CLAUDE.md §5.1: 時刻は必ず注入する）。未設定なら RealClock を使う。
 	Clock game.Clock
 }
 
@@ -38,6 +44,7 @@ func NewMux(cfg Config) *http.ServeMux {
 	registerAuthRoutes(mux, cfg)
 	registerAPIRoutes(mux, cfg)
 	registerDiscordRoutes(mux, cfg)
+	registerTickRoutes(mux, cfg)
 
 	static, err := NewStaticHandler()
 	if err != nil {

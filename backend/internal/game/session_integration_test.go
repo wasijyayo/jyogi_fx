@@ -25,7 +25,11 @@ func TestOpenSession(t *testing.T) {
 		dsn = "postgres://app:app@localhost:5432/fxgame?sslmode=disable"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 3通貨すべてに対して2099年（実運用と衝突しない架空の未来日）のBasePriceを
+	// 計算するため、tickIndexが数千万に達しCPU計算だけで10秒近くかかりうる
+	// （#35で計測: 単発のBasePrice呼び出しで約3.8秒/通貨）。10秒だとこの計算コストの
+	// 分だけでタイムアウトしうるため30秒に広げている（ロジック自体の変更ではない）。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	pool, err := pgxpool.New(ctx, dsn)
