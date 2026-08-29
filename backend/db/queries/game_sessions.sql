@@ -24,3 +24,10 @@ WHERE date = $1;
 UPDATE game_sessions
 SET claim_median = $2
 WHERE id = $1;
+
+-- name: UpdateGameSessionTickerMsgID :exec
+-- 市場ティッカーメッセージ（design.md §6.4）を初めて投稿した直後に呼ぶ（#43 NOTIFY-1）。
+-- 以後の tick はこの ID をそのまま編集し続ける（新規投稿ではなく編集。チャンネルが荒れないため）。
+UPDATE game_sessions
+SET ticker_msg_id = $2
+WHERE id = $1;

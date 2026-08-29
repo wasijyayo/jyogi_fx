@@ -257,7 +257,7 @@ func TestTick_同じtickを2回実行しても壊れない(t *testing.T) {
 		BaseAmount:     decimal.NewFromInt(100),
 		BuffMultiplier: decimal.NewFromFloat(1.5),
 	})
-	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc, claimSvc)
+	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil)
 
 	start := time.Date(2032, 6, 15, 12, 0, 0, 0, jst)
 	if err := tickSvc.Tick(ctx, start); err != nil {

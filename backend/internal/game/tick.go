@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,10 +26,26 @@ type TickService struct {
 	session     *SessionService
 	liquidation *LiquidationService
 	claim       *ClaimService
+	// ticker は市場ティッカーメッセージの編集（#43 NOTIFY-1）を担当する。
+	// nil の場合は更新をスキップする（未設定環境・単体テストでの簡略化のため。
+	// 本番の main.go では必ず設定する）。
+	ticker *TickerService
 }
 
-func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService, claim *ClaimService) *TickService {
-	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation, claim: claim}
+func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService, claim *ClaimService, ticker *TickerService) *TickService {
+	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation, claim: claim, ticker: ticker}
+}
+
+// updateTicker は市場ティッカーメッセージを更新する（design.md §4 手順5・#43）。
+// 失敗してもtick全体を失敗させない（呼び出し元コメント参照）。ログのみ残し、
+// 次のtickでの自然な回復に任せる（CLAUDE.md §5.5・issue #43完了条件）。
+func (s *TickService) updateTicker(ctx context.Context, now time.Time, session db.GameSession) {
+	if s.ticker == nil {
+		return
+	}
+	if err := s.ticker.Update(ctx, now, session); err != nil {
+		log.Printf("update ticker: %v", err)
+	}
 }
 
 // Tick は毎分呼ばれる処理の入口（design.md §4「毎分tickが担当する処理」）。
@@ -39,14 +56,14 @@ func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, li
 //	4. price_ticks 書き込み            → #35で実装。#40でイベント（shock/vol_up）の
 //	                                     価格反映もここに含めた（writePriceTickが
 //	                                     ListEventsByCurrencyを引いてBasePriceに渡す）
-//	5. 市場ティッカーメッセージの編集  → TODO(#43 NOTIFY-1)
+//	5. 市場ティッカーメッセージの編集  → #43で実装（updateTicker。TickerService.Update）
 //
 // 手順1は「価格への反映」と「Discordへの通知」の2つに分かれており（design.md §5.4）、
 // 前者は手順4に含めて#40で実装済み。後者（予兆・発火のDiscord投稿。teased/resolved
 // フラグの更新）はteased/resolvedが価格計算では見ない冪等性専用フラグであるため
 // 別issue（#44）に切り出してある。該当する機能（Discord通知・指値注文）が
-// まだ実装されていないため、1（通知のみ）・2・5 は手順の位置だけを TODO
-// コメントとして残し、3・4 を実装する。
+// まだ実装されていないため、1（通知のみ）・2 は手順の位置だけを TODO
+// コメントとして残し、3・4・5 を実装する。
 //
 // セッション外は何もしない（design.md §9.10/§9.12: 常時起動しない構成のため、
 // セッション外のtickは保存せず base(n) の再計算で賄う）。ロスカット判定
@@ -96,6 +113,9 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		if err := RecordDailySnapshots(ctx, q, openedSession.ID, now); err != nil {
 			return fmt.Errorf("record daily asset snapshots: %w", err)
 		}
+		// 寄り付き（本日最初のtick）でも市場ティッカーの初回投稿を行う
+		// （完了条件「セッション中、1つのメッセージが毎分更新され続けること」）。
+		s.updateTicker(ctx, now, openedSession)
 		return nil
 	case err != nil:
 		return fmt.Errorf("get game session: %w", err)
@@ -137,7 +157,9 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("commit tx: %w", err)
 	}
 
-	// TODO(#43 NOTIFY-1): 市場ティッカーメッセージの編集をここに追加する。
+	// 手順5: コミット済みのprice_ticksを使って市場ティッカーを更新する
+	// （sparkline/変動率は直前に書き込んだ値を読み直す。ticker.goのtickerRow参照）。
+	s.updateTicker(ctx, now, gameSession)
 
 	return nil
 }
