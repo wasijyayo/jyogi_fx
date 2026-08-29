@@ -13,7 +13,9 @@ import (
 // 早期returnするはず（もし触れれば nil pool の参照でエラーか panic になる）。
 func TestTick_セッション外は何もしない(t *testing.T) {
 	sessionSvc := NewSessionService(nil, RealClock{}, SessionConfig{})
-	tickSvc := NewTickService(nil, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(nil, RealClock{}, sessionSvc)
+	liquidationSvc := NewLiquidationService(nil, RealClock{}, tradeSvc)
+	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc)
 
 	now := time.Date(2026, 1, 1, 3, 0, 0, 0, jst) // 深夜3時JST。セッション外。
 	if err := tickSvc.Tick(context.Background(), now); err != nil {

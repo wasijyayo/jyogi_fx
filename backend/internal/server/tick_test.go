@@ -50,7 +50,9 @@ func TestTickEndpoint(t *testing.T) {
 
 	const secret = "test-tick-secret"
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{})
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
+	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc)
 
 	// 深夜0時JST（セッション外）を固定で返すクロック。Tick はセッション外なら
 	// DBに触れず早期returnするため、この時刻なら pool が未接続でも 200 になる。

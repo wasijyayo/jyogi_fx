@@ -93,9 +93,14 @@ func (s *SessionService) IsNewOrderAllowed(now time.Time) bool { return s.cfg.Is
 //  4. 寄り付きキャンドルを1本保存
 //  8. セッション開始（game_sessions に当日行を作成）
 //
-// 手順 5〜7（持ち越し建玉の再評価・清算判定・/claim用中央値算出）は
-// 該当機能（ポジション・決済・claim）がまだ実装されていないため、
-// それぞれ #36〜#39 で追加する。
+// 手順 5〜7（持ち越し建玉の再評価・清算判定）は、この関数の**呼び出し元**
+// （TickService.Tick）が OpenSession 成功後に LiquidationService を呼ぶ形で
+// 実装した（#38 TRADE-3）。OpenSession 自身がロスカットの決済処理
+// （#37 TradeService.ClosePosition）まで抱えると、TradeService → SessionService
+// （PlaceOrderのセッション判定用）→ LiquidationService → TradeService という
+// 循環依存になるため、あえてここでは呼ばない設計にしてある。
+// 手順8（/claim用中央値算出）は claim 機能（#39）がまだ実装されていないため、
+// 引き続き TODO として残す。
 //
 // 複数通貨をまたぐ処理は必ず全通貨をループする（CLAUDE.md §5.3）。
 // Cloud Scheduler の重複実行に備え、全体を冪等にしてある
@@ -141,7 +146,9 @@ func (s *SessionService) OpenSession(ctx context.Context, now time.Time) (db.Gam
 		}
 	}
 
-	// TODO(#36-#39): 持ち越し建玉の再評価・清算判定・/claim用中央値算出。
+	// 持ち越し建玉の再評価・清算判定は呼び出し元（TickService.Tick）が担当する
+	// （#38。このファイル冒頭のOpenSessionコメント参照）。
+	// TODO(#39): /claim用中央値算出。
 
 	if err := tx.Commit(ctx); err != nil {
 		return db.GameSession{}, fmt.Errorf("commit tx: %w", err)

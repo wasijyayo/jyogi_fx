@@ -248,7 +248,9 @@ func TestTick_同じtickを2回実行しても壊れない(t *testing.T) {
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tickSvc := NewTickService(pool, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
+	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc)
 
 	start := time.Date(2032, 6, 15, 12, 0, 0, 0, jst)
 	if err := tickSvc.Tick(ctx, start); err != nil {

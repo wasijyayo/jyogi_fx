@@ -289,6 +289,29 @@ open = close となり実体長がゼロになるため、チャート上で窓�
 セッション外の tick は保存しない（§2.8 冒頭のとおり）。`tick_index` に穴が空くが
 意図した状態であり、チャート描画は `tick_index` の連続性ではなく行の順序で行う。
 
+#### 清算距離の算出式（確定 #38）
+
+上の「窓の大きさ」の表、および §5.2 の shock magnitude（通貨ごとの清算距離との比
+0.8/1.6/2.8倍）は、いずれも「レバレッジ10倍で清算距離約5%」を前提にしているが、
+そこに至る計算式自体は元々ここに書かれていなかった（#38実装前にユーザーへ確認）。
+
+**採用: 維持証拠金50%方式。**
+
+```
+requiredMargin（必要証拠金） = size × entry_price / leverage
+維持証拠金 = requiredMargin × 0.5
+
+含み損益を反映した equity（＝今決済したら手元に残る額）:
+  equity = requiredMargin + pnl   （pnlはlong: (現在価格-建値)×size、short: (建値-現在価格)×size）
+
+清算条件: equity <= 維持証拠金
+```
+
+この式をレバレッジ L・清算距離（価格が何%逆行したら清算されるか）で書き直すと
+`0.5 / L` になる。L=10 なら 5.0% と、上の表・§5.2 の shock magnitude の前提と厳密に一致する。
+
+実装は `internal/game/liquidation.go` の `ShouldLiquidate`（純粋関数）。
+
 #### 窓の大きさ（off_session_scale = 0.05）
 
 23時間（1380tick）経過時、§2.12 で確定した `volatility` を用いると:
