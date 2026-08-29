@@ -18,6 +18,13 @@ SELECT * FROM users
 WHERE discord_id = $1
 FOR UPDATE;
 
+-- name: GetUser :one
+-- /balance・/profile（#41 CMD-1）用の読み取り専用フルロー取得。GetUserByIDと違い
+-- balanceも返す。ロックを取らない（読むだけで書き換えないため、GetUserForUpdateを
+-- 使い回さない）。
+SELECT * FROM users
+WHERE discord_id = $1;
+
 -- name: UpdateUserBalance :exec
 -- 取引・claim等で残高を更新する（#36 TRADE-1）。
 UPDATE users
@@ -26,7 +33,8 @@ WHERE discord_id = $1;
 
 -- name: ListAllUsers :many
 -- 「全登録者」の総資産を集計する起点（#39 ECON-1。design.md §7.2の中央値算出、
--- 将来のランキング集計 #41 でも使う想定）。ここでは残高だけを取り、未決済ポジションの
--- 含み損益は internal/game.TotalAssetsByUser 側で通貨ごとループして合算する
--- （CLAUDE.md §5.3: user×currencyでなく常に全通貨ループで積み上げる）。
-SELECT discord_id, balance FROM users;
+-- ランキング集計 #41 でも使う）。ここでは残高（とランキング表示用のdisplay_name）
+-- だけを取り、未決済ポジションの含み損益は internal/game の addOpenPositionPnL 側で
+-- 通貨ごとループして合算する（CLAUDE.md §5.3: user×currencyでなく常に全通貨
+-- ループで積み上げる）。
+SELECT discord_id, display_name, balance FROM users;

@@ -90,6 +90,12 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		if err := s.claim.RecordMedian(ctx, openedSession.ID, now); err != nil {
 			return fmt.Errorf("record claim median: %w", err)
 		}
+		// /today用の基準値も同じタイミングで保存する（#41 CMD-1。ranking.goの
+		// RecordDailySnapshotsコメント参照。RecordMedianと同じ「清算判定の後」
+		// という制約のため、ここに並べて呼ぶ）。
+		if err := RecordDailySnapshots(ctx, q, openedSession.ID, now); err != nil {
+			return fmt.Errorf("record daily asset snapshots: %w", err)
+		}
 		return nil
 	case err != nil:
 		return fmt.Errorf("get game session: %w", err)

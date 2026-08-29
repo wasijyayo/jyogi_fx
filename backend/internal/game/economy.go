@@ -33,15 +33,27 @@ func TotalAssetsByUser(ctx context.Context, q *db.Queries, now time.Time) (map[s
 		assets[u.DiscordID] = u.Balance
 	}
 
+	if err := addOpenPositionPnL(ctx, q, now, assets); err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+// addOpenPositionPnL は全通貨の未決済ポジションの含み損益を assets（userID→総資産）に
+// 加算する。TotalAssetsByUser と ranking.go（#41 CMD-1: /rank・/today）の両方が
+// 「残高を起点にしてポジションの含み損益を足す」という同じ手順を必要とするため、
+// その共通部分だけをここに切り出す（呼び出し側はまず ListAllUsers 等で残高を
+// assets に詰めてから呼ぶこと）。
+func addOpenPositionPnL(ctx context.Context, q *db.Queries, now time.Time, assets map[string]decimal.Decimal) error {
 	currencies, err := q.ListCurrencies(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list currencies: %w", err)
+		return fmt.Errorf("list currencies: %w", err)
 	}
 
 	for _, c := range currencies {
 		positions, err := q.ListOpenPositionsByCurrency(ctx, c.ID)
 		if err != nil {
-			return nil, fmt.Errorf("list open positions for %s: %w", c.Symbol, err)
+			return fmt.Errorf("list open positions for %s: %w", c.Symbol, err)
 		}
 		if len(positions) == 0 {
 			// BasePrice は経過tick数に比例したコストがかかる（pricing.goのコメント参照）。
@@ -52,7 +64,7 @@ func TotalAssetsByUser(ctx context.Context, q *db.Queries, now time.Time) (map[s
 
 		events, err := q.ListEventsByCurrency(ctx, c.ID)
 		if err != nil {
-			return nil, fmt.Errorf("list events for %s: %w", c.Symbol, err)
+			return fmt.Errorf("list events for %s: %w", c.Symbol, err)
 		}
 		tickIndex := elapsedTicks(c.EpochAt.Time, now)
 		price := CurrentPrice(c, tickIndex, now, events)
@@ -61,8 +73,7 @@ func TotalAssetsByUser(ctx context.Context, q *db.Queries, now time.Time) (map[s
 			assets[p.UserID] = assets[p.UserID].Add(PositionPnL(p, price))
 		}
 	}
-
-	return assets, nil
+	return nil
 }
 
 // median は値の中央値を返す純粋関数。要素数が偶数なら中央2つの平均を取る。

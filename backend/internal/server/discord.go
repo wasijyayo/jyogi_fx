@@ -53,14 +53,39 @@ const interactionMaxSkew = 5 * time.Minute
 type interactionRequest struct {
 	Type interactionType         `json:"type"`
 	Data *interactionCommandData `json:"data,omitempty"`
+	// Member はギルド（サーバー）内で実行された場合に入る。DMの場合は代わりに
+	// User が入る（Discordの仕様。design.md §6.1）。呼び出しユーザーのID解決は
+	// interactionUserID を使うこと（両方を直接見ない）。
+	Member *interactionMember `json:"member,omitempty"`
+	User   *interactionUser   `json:"user,omitempty"`
+}
+
+// interactionMember はギルド内実行時にDiscordが送ってくるメンバー情報のうち
+// ユーザーID解決に必要な部分だけを持つ。
+type interactionMember struct {
+	User *interactionUser `json:"user,omitempty"`
+}
+
+type interactionUser struct {
+	ID string `json:"id"`
 }
 
 // interactionCommandData はスラッシュコマンド実行時に Discord が送ってくる data。
 // Name は internal/discord.Commands の CommandXxx 定数と同じ値になる
 // （#29: コマンド定義は internal/discord に 1 箇所にまとめ、名前をここで対応づける）。
-// 実際のコマンドごとの分岐・処理は #41 / #42 で実装する。
+// 実際のコマンドごとの分岐・処理は commands.go（#41 / #42）で実装する。
 type interactionCommandData struct {
-	Name string `json:"name"`
+	Name    string                     `json:"name"`
+	Options []interactionCommandOption `json:"options,omitempty"`
+}
+
+// interactionCommandOption はスラッシュコマンドの引数1つ分。
+// Value は文字列として受ける（USER型オプションの値はDiscordのスノーフレークIDが
+// 文字列で入る。STRING型もそのまま文字列なので、MVPコマンドの範囲では型を
+// 分ける必要が無い）。
+type interactionCommandOption struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type interactionResponse struct {
@@ -69,8 +94,37 @@ type interactionResponse struct {
 }
 
 type interactionResponseData struct {
-	Content string `json:"content,omitempty"`
-	Flags   int    `json:"flags,omitempty"`
+	Content string         `json:"content,omitempty"`
+	Embeds  []discordEmbed `json:"embeds,omitempty"`
+	Flags   int            `json:"flags,omitempty"`
+}
+
+// discordEmbed はDiscordのEmbedオブジェクトのうち、MVPコマンド（#41/#42）で
+// 使うフィールドだけを持つ。
+type discordEmbed struct {
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Color       int                 `json:"color,omitempty"`
+	Fields      []discordEmbedField `json:"fields,omitempty"`
+}
+
+type discordEmbedField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline,omitempty"`
+}
+
+// interactionUserID は呼び出しユーザーのDiscordユーザーIDを解決する
+// （design.md §6.1「Discordのペイロードから取得できるユーザーIDをそのまま
+// users.discord_idとして使う」）。ギルド内実行ならmember.user.id、DMならuser.id。
+func interactionUserID(req interactionRequest) (string, bool) {
+	if req.Member != nil && req.Member.User != nil && req.Member.User.ID != "" {
+		return req.Member.User.ID, true
+	}
+	if req.User != nil && req.User.ID != "" {
+		return req.User.ID, true
+	}
+	return "", false
 }
 
 func registerDiscordRoutes(mux *http.ServeMux, cfg Config) {
@@ -144,8 +198,17 @@ func handleInteractions(cfg Config) http.HandlerFunc {
 		switch req.Type {
 		case interactionPing:
 			writeJSON(w, http.StatusOK, interactionResponse{Type: callbackPong})
+		case interactionApplicationCommand:
+			// design.md §6.2「3秒以内に応答が必要」。/balance /rank /today /profile は
+			// 20人規模の集計で軽いため、deferred応答（type:5）は使わず直接返す
+			// （§6.2「20人規模の集計なら通常は直接返して問題ない」）。
+			data := handleSlashCommand(r.Context(), cfg, req, cfg.Clock.Now())
+			writeJSON(w, http.StatusOK, interactionResponse{
+				Type: callbackChannelMessage,
+				Data: &data,
+			})
 		default:
-			// スラッシュコマンドの実際の処理は後続 issue（#41, #42）で実装する。
+			// ボタン・モーダル（#42）等、まだ実装していないInteraction種別。
 			// **ここで callbackPong を返してはいけない。** PONG は PING 専用の
 			// callback type なので、Discord に拒否され利用者には
 			// 「インタラクションに失敗しました」と表示される。
