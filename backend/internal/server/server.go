@@ -16,6 +16,9 @@ type Config struct {
 	Tick    *game.TickService
 	Ranking *game.RankingService
 	Profile *game.ProfileService
+	Quote   *game.QuoteService
+	Trade   *game.TradeService
+	Claim   *game.ClaimService
 
 	// SecureCookies が true のとき Cookie に Secure 属性を付ける。
 	// Cloud Run（本番）では true、ローカル開発（http://localhost）では false にする。

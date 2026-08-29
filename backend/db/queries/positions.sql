@@ -29,3 +29,11 @@ RETURNING *;
 -- 行ロックを取る（#37 の行ロックをそのまま再利用する）。
 SELECT * FROM positions
 WHERE currency_id = $1 AND closed_at IS NULL;
+
+-- name: ListOpenPositionsByUser :many
+-- /positions（#42 CMD-2）用に、1ユーザー分の未決済ポジションを開いた順で返す。
+-- ここでもロックは取らない（読み取り専用の表示用。実際の決済はClosePositionが
+-- 個別に行ロックを取る）。
+SELECT * FROM positions
+WHERE user_id = $1 AND closed_at IS NULL
+ORDER BY opened_at;
