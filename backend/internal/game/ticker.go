@@ -86,12 +86,16 @@ func (s *TickerService) Update(ctx context.Context, now time.Time, session db.Ga
 //	📊 マーケット  21:23 (残り37分)
 //	━━━━━━━━━━━━━━━━━━
 //	JOG    100.44  ▲+1.2%  ▁▂▄▆█▇▅▄
+//
 //	WASI    98.10  ▼-0.8%  █▇▆▄▃▂▁▂
+//
 //	CHEBU  103.02  ▲+3.4%  ▁▁▂▃▅▇██
 //
 // design.md本文の見た目は列が揃っているが、Discordの通常メッセージは等幅フォント
 // ではないため実際に揃えて表示するにはコードブロックが必要になる。この
-// コードブロック化はdesign.mdに明記のない表示上の実装判断。
+// コードブロック化はdesign.mdに明記のない表示上の実装判断。行間の空行も同様に、
+// スパークラインが最大の高さ（█）になると行同士が詰まって見づらいという
+// フィードバック（issue #75）に対応した表示上の調整。
 func buildTickerContent(ctx context.Context, q *db.Queries, now time.Time, session db.GameSession, currencies []db.Currency) (string, error) {
 	remainingMinutes := int64(session.ClosedAt.Time.Sub(now) / time.Minute)
 	if remainingMinutes < 0 {
@@ -103,7 +107,12 @@ func buildTickerContent(ctx context.Context, q *db.Queries, now time.Time, sessi
 	b.WriteString(tickerDivider)
 	b.WriteString("\n```\n")
 
-	for _, c := range currencies {
+	// 通貨の行の間に空行を挟む。スパークラインが最大の高さ（█）になると
+	// 行同士が詰まって見づらいというフィードバックへの対応（issue #75）。
+	for i, c := range currencies {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
 		row, err := tickerRow(ctx, q, c)
 		if err != nil {
 			return "", fmt.Errorf("ticker row for %s: %w", c.Symbol, err)
