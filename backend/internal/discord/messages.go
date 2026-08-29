@@ -44,6 +44,36 @@ func EditMessage(ctx context.Context, cfg MessagesConfig, channelID, messageID, 
 	return err
 }
 
+// DeleteMessage はメッセージを削除する。
+//
+// 主な用途は game.TickerService.Update の補償処理: CreateMessage（投稿）自体は
+// 成功したのに、その直後の ticker_msg_id の保存が失敗した場合、投稿した
+// メッセージをここで削除して「まだ投稿していない」状態に巻き戻す。これをしないと
+// 次tickでも ticker_msg_id が空のままなので再度新規投稿してしまい、孤児メッセージが
+// 積み重なって「新規投稿が増えない」という完了条件が崩れる。
+func DeleteMessage(ctx context.Context, cfg MessagesConfig, channelID, messageID string) error {
+	url := fmt.Sprintf("%s/channels/%s/messages/%s", cfg.baseURL(), channelID, messageID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+cfg.BotToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Discord は削除成功時に 204 No Content を返す。
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("discord delete message failed: status=%d body=%s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 // sendChannelMessage は POST（新規投稿）/ PATCH（編集）の共通処理。
 //
 // レート制限（issue #43「Discord API のレート制限に注意」）に対する明示的な

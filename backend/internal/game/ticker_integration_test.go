@@ -123,3 +123,93 @@ func TestTickerService_Update(t *testing.T) {
 		t.Errorf("editCalls = %d, want 1", editCalls)
 	}
 }
+
+// TestTickerService_Update_ID保存に失敗したら投稿を補償削除する は CodeRabbit の指摘
+// （PR #71）どおり、投稿(POST)自体は成功したのに続く ticker_msg_id の保存だけが
+// 失敗した場合に、投稿したメッセージを削除して「まだ投稿していない」状態へ
+// 巻き戻すこと（次tickで孤児メッセージを増やさず安全に再投稿できること）を確認する。
+//
+// DB書き込みだけを確実に失敗させるため、CHECK制約を一時的に追加し、モックDiscord
+// サーバーが返すメッセージIDをその制約に違反する値にする（プール全体を壊すと
+// CreateMessageより前の読み取り(ListCurrencies等)まで失敗してしまい「投稿自体は
+// 成功した」状況を再現できないため、この方法をとる）。
+func TestTickerService_Update_ID保存に失敗したら投稿を補償削除する(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	epoch := time.Date(2099, 3, 2, 12, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
+	c := insertTestCurrency(t, ctx, pool, "TICKERCOMP", 555002, epoch)
+
+	sessionDate := pgtype.Date{Time: time.Date(2099, 3, 2, 0, 0, 0, 0, jst), Valid: true}
+	t.Cleanup(func() {
+		cctx := context.Background()
+		_, _ = pool.Exec(cctx, `ALTER TABLE game_sessions DROP CONSTRAINT IF EXISTS ticker_msg_id_test_guard`)
+		if s, err := q.GetGameSessionByDate(cctx, sessionDate); err == nil {
+			_, _ = pool.Exec(cctx, `DELETE FROM price_ticks WHERE session_id = $1`, s.ID)
+			_, _ = pool.Exec(cctx, `DELETE FROM game_sessions WHERE id = $1`, s.ID)
+		}
+		_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+	})
+
+	session, err := q.CreateGameSession(ctx, db.CreateGameSessionParams{
+		Date:     sessionDate,
+		Seed:     1,
+		OpenedAt: pgtype.Timestamptz{Time: epoch, Valid: true},
+		ClosedAt: pgtype.Timestamptz{Time: epoch.Add(time.Hour), Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateGameSession: %v", err)
+	}
+	if err := openCurrency(ctx, q, session, c, epoch); err != nil {
+		t.Fatalf("openCurrency(寄り付き): %v", err)
+	}
+
+	const forcedFailureMsgID = "orphan-msg-1"
+	if _, err := pool.Exec(ctx, `ALTER TABLE game_sessions ADD CONSTRAINT ticker_msg_id_test_guard
+		CHECK (ticker_msg_id IS DISTINCT FROM '`+forcedFailureMsgID+`')`); err != nil {
+		t.Fatalf("add test guard constraint: %v", err)
+	}
+
+	var createCalls, deleteCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/channels/ticker-chan/messages", func(w http.ResponseWriter, r *http.Request) {
+		createCalls++
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": forcedFailureMsgID})
+	})
+	mux.HandleFunc("/channels/ticker-chan/messages/"+forcedFailureMsgID, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		deleteCalls++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ticker := NewTickerService(pool, RealClock{}, discord.MessagesConfig{
+		BotToken:   "test-token",
+		APIBaseURL: srv.URL,
+	}, "ticker-chan")
+
+	if err := ticker.Update(ctx, epoch, session); err == nil {
+		t.Fatal("want error（ID保存がCHECK制約違反で失敗するはず）, got nil")
+	}
+	if createCalls != 1 {
+		t.Errorf("createCalls = %d, want 1", createCalls)
+	}
+	if deleteCalls != 1 {
+		t.Errorf("deleteCalls = %d, want 1（補償削除が呼ばれるはず）", deleteCalls)
+	}
+
+	saved, err := q.GetGameSessionByDate(ctx, sessionDate)
+	if err != nil {
+		t.Fatalf("GetGameSessionByDate: %v", err)
+	}
+	if saved.TickerMsgID.Valid {
+		t.Errorf("ticker_msg_id = %+v, want 未設定（補償削除後もNULLのままのはず。"+
+			"設定されていると次tickが編集を試みて404になる）", saved.TickerMsgID)
+	}
+}

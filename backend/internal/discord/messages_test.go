@@ -82,6 +82,37 @@ func TestEditMessage(t *testing.T) {
 	}
 }
 
+// TestDeleteMessage は game.TickerService.Update の補償処理（投稿には成功したが
+// IDの保存に失敗した場合に投稿を取り消す）が使うDELETEリクエストの形を確認する。
+func TestDeleteMessage(t *testing.T) {
+	var gotPath, gotMethod, gotAuth string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/channels/chan-1/messages/msg-1", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := discord.MessagesConfig{BotToken: "the-token", APIBaseURL: srv.URL}
+
+	if err := discord.DeleteMessage(context.Background(), cfg, "chan-1", "msg-1"); err != nil {
+		t.Fatalf("DeleteMessage: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/channels/chan-1/messages/msg-1" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotAuth != "Bot the-token" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bot the-token")
+	}
+}
+
 // TestCreateMessage_Discordがエラーを返したら失敗として扱う は
 // 「Discord API のレート制限に注意」（issue #43）に対する呼び出し側の前提
 // （エラーをそのまま返すのでticker_msg_idを更新せず、次tickで再試行できる）を確認する。

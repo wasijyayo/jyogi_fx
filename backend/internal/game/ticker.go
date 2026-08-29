@@ -68,7 +68,15 @@ func (s *TickerService) Update(ctx context.Context, now time.Time, session db.Ga
 		ID:          session.ID,
 		TickerMsgID: pgtype.Text{String: messageID, Valid: true},
 	}); err != nil {
-		return fmt.Errorf("save ticker message id: %w", err)
+		// 投稿(POST)自体は成功したのに保存だけ失敗した状態を放置すると、
+		// session.TickerMsgIDがNULLのままなので次tickでまた新規投稿してしまい、
+		// 「新規投稿が増えない」という完了条件が崩れる。投稿したメッセージを
+		// 削除して「まだ投稿していない」状態に巻き戻し、次tickでの再投稿を
+		// 安全にする（discord.DeleteMessageのコメント参照）。
+		if delErr := discord.DeleteMessage(ctx, s.messages, s.channelID, messageID); delErr != nil {
+			return fmt.Errorf("save ticker message id: %w (補償削除にも失敗、孤児メッセージが残っている可能性: %v)", err, delErr)
+		}
+		return fmt.Errorf("save ticker message id: %w (投稿済みメッセージは補償削除済み)", err)
 	}
 	return nil
 }
