@@ -21,31 +21,36 @@ type TickService struct {
 	// clock は現時点ではどのメソッドからも使われていない（Tick は now を引数で
 	// 受け取る。CLAUDE.md §5.1）。SessionService と同じ理由で、将来 now を
 	// 引数に取らない便利メソッドを追加する時のために保持する。
-	clock   Clock
-	session *SessionService
+	clock       Clock
+	session     *SessionService
+	liquidation *LiquidationService
 }
 
-func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService) *TickService {
-	return &TickService{pool: pool, clock: clock, session: session}
+func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService) *TickService {
+	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation}
 }
 
 // Tick は毎分呼ばれる処理の入口（design.md §4「毎分tickが担当する処理」）。
 //
 //	1. イベントの予兆投稿 / 発火判定   → TODO(#40 EVENT-1)
 //	2. 指値・逆指値の約定判定          → TODO(#36/#37 TRADE-1/2)
-//	3. ロスカット判定                  → TODO(#38 TRADE-3)
-//	4. price_ticks 書き込み            → このIssue(#35)で実装
+//	3. ロスカット判定                  → このIssue(#38)で実装
+//	4. price_ticks 書き込み            → #35で実装
 //	5. 市場ティッカーメッセージの編集  → TODO(#43 NOTIFY-1)
 //
-// 該当する機能（注文・ポジション・イベント）がまだ実装されていないため、
-// 1〜3・5 は手順の位置だけを TODO コメントとして残し、4 のみを実装する。
+// 該当する機能（イベント・指値注文）がまだ実装されていないため、1・2・5 は
+// 手順の位置だけを TODO コメントとして残し、3・4 を実装する。
 //
 // セッション外は何もしない（design.md §9.10/§9.12: 常時起動しない構成のため、
-// セッション外のtickは保存せず base(n) の再計算で賄う）。
+// セッション外のtickは保存せず base(n) の再計算で賄う）。ロスカット判定
+// （手順3）もこの早期returnより後にあるため、セッション外は判定されない
+// （design.md §7.1 B案「セッション外では判定しない」・確定#38の完了条件）。
 //
 // 冪等（CLAUDE.md §5.5）: Cloud Scheduler の重複実行・遅延を前提に、同じ now で
 // 何度呼ばれても price_ticks が壊れないようにしてある（UpsertPriceTick の
-// ON CONFLICT。design.md §8）。tick の欠損（呼ばれない分）も許容する（§3.6）。
+// ON CONFLICT。design.md §8）。ロスカットも同じ now で再実行されて構わない
+// （LiquidationService.LiquidateOpenPositions のコメント参照）。
+// tick の欠損（呼ばれない分）も許容する（§3.6）。
 func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 	if !s.session.IsSessionOpen(now) {
 		return nil
@@ -69,9 +74,25 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		if _, err := s.session.OpenSession(ctx, now); err != nil {
 			return fmt.Errorf("open session: %w", err)
 		}
+		// OpenSession が全通貨のpressureを0にリセットした直後にロスカット判定を
+		// 行うことで、「持ち越し建玉を翌日の寄り付きでまとめて判定する」
+		// （design.md §2.7 寄り付き処理順序6〜7・§7.1 B案）を実現する。
+		// 判定に使う価格は寄り付き価格（base(n)。pressureは0）になる。
+		if _, err := s.liquidation.LiquidateOpenPositions(ctx, now); err != nil {
+			return fmt.Errorf("liquidate open positions at opening: %w", err)
+		}
 		return nil
 	case err != nil:
 		return fmt.Errorf("get game session: %w", err)
+	}
+
+	// ロスカット判定（手順3）。price_ticks書き込み（手順4）より前に行う
+	// （design.md §4の手順順序）。LiquidationServiceは独自にトランザクションを
+	// 管理する（#37のClosePositionを1ポジションずつ再利用するため。
+	// liquidation.go のコメント参照）ため、この後のtickの書き込みトランザクション
+	// より前・かつその外側で呼ぶ。
+	if _, err := s.liquidation.LiquidateOpenPositions(ctx, now); err != nil {
+		return fmt.Errorf("liquidate open positions: %w", err)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -90,7 +111,6 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 
 	// TODO(#40 EVENT-1): イベントの予兆投稿 / 発火判定をここに追加する。
 	// TODO(#36/#37 TRADE-1/2): 指値・逆指値の約定判定をここに追加する。
-	// TODO(#38 TRADE-3): ロスカット判定をここに追加する。
 
 	for _, c := range currencies {
 		if err := writePriceTick(ctx, txq, gameSession, c, now); err != nil {

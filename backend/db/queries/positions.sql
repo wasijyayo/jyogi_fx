@@ -21,3 +21,11 @@ UPDATE positions
 SET closed_at = $2, pnl = $3
 WHERE id = $1
 RETURNING *;
+
+-- name: ListOpenPositionsByCurrency :many
+-- ロスカット判定対象の未決済ポジション一覧を返す（#38 TRADE-3）。全通貨ループの
+-- 内側で呼ぶ（CLAUDE.md §5.3）。ここではロックを取らない。含み損益の再計算は
+-- 読み取り専用で行い、実際に清算するポジションだけ ClosePosition 側で個別に
+-- 行ロックを取る（#37 の行ロックをそのまま再利用する）。
+SELECT * FROM positions
+WHERE currency_id = $1 AND closed_at IS NULL;

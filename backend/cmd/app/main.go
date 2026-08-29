@@ -95,7 +95,9 @@ func runServe() error {
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{
 		AlwaysOpen: os.Getenv("GAME_ALWAYS_OPEN") == "true",
 	})
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
+	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc)
 
 	mux := server.NewMux(server.Config{
 		Auth:             authSvc,
