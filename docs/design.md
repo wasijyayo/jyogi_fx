@@ -984,12 +984,17 @@ B により「寄り付きで一気に決着」という毎日のハイライト
 
 #### 定義
 
+**ポジションごとに独立して判定する（分離マージン）。** 口座の他の建玉・残高
+（`balance`）は判定に含めない。1つの建玉が清算基準を割っても、他の建玉は
+無関係に維持される（確定 #38。§6.8「〇〇のポジションが消滅しました」の
+演出文言も1建玉単位を前提にしている）。
+
 ```
-notional = qty × entry_price
-必要証拠金 M = Σ notional / max_leverage
-含み損益 = (current_price − entry_price) × qty   [ロング]
-        = (entry_price − current_price) × qty   [ショート]
-equity = balance + Σ含み損益
+notional = size × entry_price
+必要証拠金 M = notional / leverage   （そのポジションのentry_price・leverageで固定）
+含み損益 = (current_price − entry_price) × size   [ロング]
+        = (entry_price − current_price) × size   [ショート]
+equity = M + 含み損益   （＝このポジションを今決済したら手元に返る額）
 証拠金維持率 = equity / M
 ```
 
@@ -999,17 +1004,13 @@ equity = balance + Σ含み損益
 
 #### 清算距離の導出
 
-価格変化率 `x` に対し:
+エントリー価格からの価格変化率 `x`（ロング視点。ショートは符号反転）に対し:
 
 ```
-equity = balance + notional × x
-清算: balance + notional × x < (notional / L) × 0.5
-```
-
-フルレバレッジ時（`balance = notional / L`）:
-
-```
-x < −0.5 / L
+equity = M + notional × x        （M = notional / L）
+清算条件: M + notional × x < M × 0.5
+        ⇔ notional × x < −M × 0.5
+        ⇔ x < −0.5 / L
 ```
 
 | レバレッジ | 清算距離 |
@@ -1040,13 +1041,8 @@ MVPでは加算しない。将来カスケードを演出として入れる場�
 セッション外は清算判定を行わない。
 寄り付き（§2.7）で価格確定後にまとめて判定する。
 
-> **要確認（#38実装時点の暫定実装との差分）:** ここでの `equity`/`M` は
-> ユーザーの**全建玉を合算した口座全体**の値（Σ）として定義されている
-> （＝クロスマージン。1つの口座がまとめて清算される）。一方 #38 (PR #65) で
-> 実装済みの `ShouldLiquidate` は**ポジションごとに独立**に判定する分離マージン
-> 方式（このポジション単体の含み損益だけを見る）。§6.8/§7.6 の「破産」演出が
-> 口座単位のイベントを想定している点はクロスマージン方式と整合するため、
-> 実装をこの節に合わせて修正するか要確認（詳細はチャットの回答を参照）。
+実装は `internal/game/liquidation.go` の `ShouldLiquidate`（純粋関数）・
+`LiquidationService.LiquidateOpenPositions`（#38 PR #65）。
 
 ### 7.5 インフレ対策
 

@@ -12,15 +12,12 @@ import (
 	"fxgame/backend/internal/db"
 )
 
-// maintenanceMarginRatio は必要証拠金に対する維持証拠金の割合（#38 TRADE-3で確定。
-// 実装前にユーザーへ確認済み: 「維持証拠金50%方式」を採用）。
+// maintenanceMarginRatio は必要証拠金に対する維持証拠金の割合（design.md §7.4
+// 「清算判定」で確定。維持証拠金率50%・ポジションごとに独立判定する分離マージン方式）。
 //
-// design.md §2.8「窓の大きさ」の清算距離表と §5.2 の shock magnitude（通貨ごとの
-// 清算距離との比 0.8/1.6/2.8倍）は、いずれも「レバレッジ10倍で清算距離約5%」を
-// 前提にしているが、そこに至る計算式そのものは §2.8 に書かれていなかった
-// （実装前に確認必須の空白だった）。この値からレバレッジLの清算距離を逆算すると
-// maintenanceMarginRatio/L となり、L=10 で 0.5/10 = 5.0% と厳密に一致する
-// （ShouldLiquidate のコメントに式の詳細）。
+// この値からレバレッジLの清算距離を逆算すると maintenanceMarginRatio/L となり、
+// L=10 で 0.5/10 = 5.0%（design.md §7.4「清算距離の導出」の表と一致。
+// ShouldLiquidate のコメントに式の詳細）。
 var maintenanceMarginRatio = decimal.NewFromFloat(0.5)
 
 // LiquidationService はロスカット（強制決済）判定を担当する（#38 TRADE-3。
@@ -121,21 +118,21 @@ func (s *LiquidationService) LiquidateOpenPositions(ctx context.Context, now tim
 }
 
 // ShouldLiquidate は position が currentPrice の下で清算基準を割っているかを返す
-// 純粋関数（design.md §2.8「窓の大きさ」・§5.2「shockのmagnitude」が前提にしている
-// 「レバレッジ10倍で清算距離約5%」の根拠）。
+// 純粋関数（design.md §7.4「清算判定」）。他の建玉・口座残高は見ない
+// ポジションごとに独立の判定（分離マージン。§7.4で確定）。
 //
 // 必要証拠金（PlaceOrderで拘束した額。design.md §7.0）:
 //
 //	requiredMargin = size × entry_price / leverage
 //
-// 維持証拠金をその50%とし（#38で確認済み。上部コメント参照）、含み損益を反映した
-// equity（＝今決済したら手元に残る額）がこれを下回ったら清算する:
+// 維持証拠金をその50%とし、含み損益を反映した
+// equity（＝今決済したら手元に返る額）がこれを下回ったら清算する:
 //
 //	equity = requiredMargin + pnl
 //	清算条件: equity <= requiredMargin × 0.5
 //
 // この式をレバレッジ L・清算距離（価格が何%逆行したら清算されるか）で書き直すと
-// 0.5/L になる。L=10 なら 5.0%（design.md「清算距離はレバレッジ10倍で約5%」と一致）。
+// 0.5/L になる。L=10 なら 5.0%（design.md §7.4「清算距離の導出」の表と一致）。
 func ShouldLiquidate(p db.Position, currentPrice decimal.Decimal) bool {
 	requiredMargin := p.Size.Mul(p.EntryPrice).Div(p.Leverage)
 
