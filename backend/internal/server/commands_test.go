@@ -120,6 +120,22 @@ func TestSlashCommands_情報参照系(t *testing.T) {
 		}
 	})
 
+	t.Run("/pips は生涯獲得pipsランキングを公開Embedで返す", func(t *testing.T) {
+		body := `{"type":2,"data":{"name":"pips"},"member":{"user":{"id":"` + userID + `"}}}`
+		resp := send(t, body)
+
+		data, _ := resp["data"].(map[string]any)
+		if _, hasFlags := data["flags"]; hasFlags && data["flags"].(float64) != 0 {
+			t.Errorf("/pips は公開メッセージのはずだがflags = %v", data["flags"])
+		}
+		embeds, _ := data["embeds"].([]any)
+		embed, _ := embeds[0].(map[string]any)
+		desc, _ := embed["description"].(string)
+		if !strings.Contains(desc, "<@"+userID+">") {
+			t.Errorf("description = %q, want it to contain <@%s>", desc, userID)
+		}
+	})
+
 	t.Run("/today はセッション未開始ならephemeralなエラーを返す", func(t *testing.T) {
 		body := `{"type":2,"data":{"name":"today"},"member":{"user":{"id":"` + userID + `"}}}`
 		resp := send(t, body)
@@ -246,7 +262,7 @@ func TestSlashCommands_操作系(t *testing.T) {
 	}
 
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{AlwaysOpen: true})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	rankingSvc := game.NewRankingService(pool, game.RealClock{})
 	claimSvc := game.NewClaimService(pool, game.RealClock{}, game.ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),

@@ -78,6 +78,43 @@ func TestNotifyService_LargeTrade(t *testing.T) {
 	})
 }
 
+// TestNotifyService_ProfitTrade は利益確定通知（#82）の文面を確認する。
+func TestNotifyService_ProfitTrade(t *testing.T) {
+	notify, capture := newTestNotifyService(t)
+
+	t.Run("ロング", func(t *testing.T) {
+		if err := notify.ProfitTrade(context.Background(), "太郎", "JOG", SideLong, 250); err != nil {
+			t.Fatalf("ProfitTrade: %v", err)
+		}
+		if !strings.Contains(capture.content, "太郎") || !strings.Contains(capture.content, "JOG") ||
+			!strings.Contains(capture.content, "ロング") || !strings.Contains(capture.content, "+250pips") {
+			t.Errorf("content = %q", capture.content)
+		}
+	})
+
+	t.Run("ショート", func(t *testing.T) {
+		if err := notify.ProfitTrade(context.Background(), "花子", "CHEBU", SideShort, 300); err != nil {
+			t.Fatalf("ProfitTrade: %v", err)
+		}
+		if !strings.Contains(capture.content, "ショート") || !strings.Contains(capture.content, "+300pips") {
+			t.Errorf("content = %q", capture.content)
+		}
+	})
+}
+
+// TestNotifyService_LifeWinner は「人生の勝者」ロール獲得通知（#84）の文面を確認する。
+func TestNotifyService_LifeWinner(t *testing.T) {
+	notify, capture := newTestNotifyService(t)
+
+	if err := notify.LifeWinner(context.Background(), "太郎", 10000); err != nil {
+		t.Fatalf("LifeWinner: %v", err)
+	}
+	if !strings.Contains(capture.content, "太郎") || !strings.Contains(capture.content, "10000pips") ||
+		!strings.Contains(capture.content, "人生の勝者") {
+		t.Errorf("content = %q", capture.content)
+	}
+}
+
 // TestNotifyService_Liquidation はroast_enabledでいじり文言/中立文言を切り替えることを確認する
 // （design.md §6.8「いじりの強度は個別に切れるようにする」）。
 func TestNotifyService_Liquidation(t *testing.T) {

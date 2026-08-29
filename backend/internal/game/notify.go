@@ -74,6 +74,16 @@ func (n *NotifyService) ProfitTrade(ctx context.Context, displayName, symbol str
 	return n.post(ctx, content)
 }
 
+// LifeWinner は「人生の勝者」ロール獲得の祝福通知（#84。design.mdに元々の定義は
+// 無く、ユーザーからの追加要望）。生涯累計pipsが閾値を超えて初めてロールを
+// 獲得した瞬間にだけ投稿する（LifeWinnerService.GrantIfEligibleが冪等性を
+// 保証するため、ここでは呼ばれた＝初回付与という前提で書ける）。
+func (n *NotifyService) LifeWinner(ctx context.Context, displayName string, thresholdPips int64) error {
+	content := fmt.Sprintf("👑 %s が生涯累計 %dpips を突破し、「人生の勝者」の称号を獲得しました！殿堂入りです。",
+		displayName, thresholdPips)
+	return n.post(ctx, content)
+}
+
 // roastTemplates は強制ロスカット時のいじりテンプレ（design.md §6.8「ロスカットの
 // 演出」。テンプレをランダム化して飽きを防ぐ）。%s は表示名・通貨シンボル・
 // レバレッジの順。

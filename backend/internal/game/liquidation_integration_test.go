@@ -75,7 +75,7 @@ func TestLiquidateOpenPositions_清算基準を割ったポジションが強制
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 
 	leverage := decimal.NewFromInt(10) // 清算距離5%（design.md §2.8/§5.2）
@@ -100,6 +100,17 @@ func TestLiquidateOpenPositions_清算基準を割ったポジションが強制
 	}
 	if !gotPosition.Pnl.Valid || !gotPosition.Pnl.Decimal.IsNegative() {
 		t.Errorf("pnl = %+v, want 負の値（含み損での強制決済）", gotPosition.Pnl)
+	}
+
+	// #84: 強制ロスカットもTradeService.ClosePosition経由のため、生涯累計pips
+	// （users.lifetime_pips）にも（負の値として）自然に反映されるはず
+	// （CLAUDE.md §4「4つの入口はすべて同じサービス層を呼ぶ」）。
+	gotUser, err := q.GetUser(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if !gotUser.LifetimePips.IsNegative() {
+		t.Errorf("lifetime_pips = %s, want 負の値（含み損での強制決済）", gotUser.LifetimePips)
 	}
 }
 
@@ -129,7 +140,7 @@ func TestLiquidateOpenPositions_清算距離内のポジションは維持され
 	})
 
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 
 	leverage := decimal.NewFromInt(10) // 清算距離5%（design.md §2.8/§5.2）
@@ -186,7 +197,7 @@ func TestTick_セッション外の時刻を注入しても清算は実行され
 	// AlwaysOpen のセッションで PlaceOrder する（epoch自体はセッション開始時刻なので
 	// 本来は不要だが、他のテストとの対称性のため明示する）。
 	setupSessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{AlwaysOpen: true})
-	setupTradeSvc := NewTradeService(pool, RealClock{}, setupSessionSvc, nil, decimal.Zero, decimal.Zero)
+	setupTradeSvc := NewTradeService(pool, RealClock{}, setupSessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 
 	leverage := decimal.NewFromInt(10)
 	// 清算距離5%を大きく超える含み損（-50%）を用意し、「判定さえされれば確実に
@@ -197,7 +208,7 @@ func TestTick_セッション外の時刻を注入しても清算は実行され
 
 	// 本番相当の非AlwaysOpenセッションでTickServiceを組み立てる。
 	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero)
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
 	liquidationSvc := NewLiquidationService(pool, RealClock{}, tradeSvc)
 	claimSvc := NewClaimService(pool, RealClock{}, ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),
