@@ -104,12 +104,31 @@ func runServe() error {
 		return fmt.Errorf("DISCORD_TICKER_CHANNEL_ID is not set")
 	}
 
+	// 自動通知（design.md §6.7〜6.9、#44 NOTIFY-2）用の投稿先チャンネル。
+	// #ティッカーとは別チャンネル（design.md §6.11「3チャンネル構成」）。
+	notifyChannelID := os.Getenv("DISCORD_NOTIFY_CHANNEL_ID")
+	if notifyChannelID == "" {
+		return fmt.Errorf("DISCORD_NOTIFY_CHANNEL_ID is not set")
+	}
+	notifySvc := game.NewNotifyService(discord.MessagesConfig{
+		BotToken: discordBotToken,
+	}, notifyChannelID)
+
+	// 大口取引通知（design.md §6.7 MVP必須）の閾値（%の価格インパクト）。
+	// design.mdに定義が無かったためユーザーに確認して決定した値（デフォルト2%。
+	// デプロイなしで調整できるよう環境変数で上書き可能にする。CLAIM_BASE_AMOUNTと
+	// 同じ方針）。
+	largeTradeThresholdPercent, err := decimalEnv("LARGE_TRADE_IMPACT_PERCENT", "2")
+	if err != nil {
+		return fmt.Errorf("LARGE_TRADE_IMPACT_PERCENT: %w", err)
+	}
+
 	// GAME_ALWAYS_OPEN=true で開発環境の「取引時間が常に開いている」モードを有効化する
 	// （CLAUDE.md §5.1）。本番では未設定のままにすること。
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{
 		AlwaysOpen: os.Getenv("GAME_ALWAYS_OPEN") == "true",
 	})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, notifySvc, largeTradeThresholdPercent)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
 
 	// CLAIM_BASE_AMOUNT・CLAIM_MEDIAN_BUFF_MULTIPLIER はデプロイなしで調整できる
@@ -131,9 +150,10 @@ func runServe() error {
 	tickerSvc := game.NewTickerService(pool, game.RealClock{}, discord.MessagesConfig{
 		BotToken: discordBotToken,
 	}, tickerChannelID)
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc, tickerSvc)
 
 	rankingSvc := game.NewRankingService(pool, game.RealClock{})
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc, tickerSvc, notifySvc, rankingSvc)
+
 	profileSvc := game.NewProfileService(pool, game.RealClock{}, rankingSvc)
 	quoteSvc := game.NewQuoteService(pool, game.RealClock{})
 

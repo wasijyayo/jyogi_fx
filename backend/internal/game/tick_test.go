@@ -15,13 +15,13 @@ import (
 // 早期returnするはず（もし触れれば nil pool の参照でエラーか panic になる）。
 func TestTick_セッション外は何もしない(t *testing.T) {
 	sessionSvc := NewSessionService(nil, RealClock{}, SessionConfig{})
-	tradeSvc := NewTradeService(nil, RealClock{}, sessionSvc)
+	tradeSvc := NewTradeService(nil, RealClock{}, sessionSvc, nil, decimal.Zero)
 	liquidationSvc := NewLiquidationService(nil, RealClock{}, tradeSvc)
 	claimSvc := NewClaimService(nil, RealClock{}, ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),
 		BuffMultiplier: decimal.NewFromFloat(1.5),
 	})
-	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil)
+	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil, nil, nil)
 
 	now := time.Date(2026, 1, 1, 3, 0, 0, 0, jst) // 深夜3時JST。セッション外。
 	if err := tickSvc.Tick(context.Background(), now); err != nil {

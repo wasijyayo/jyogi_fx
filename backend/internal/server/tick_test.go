@@ -56,13 +56,13 @@ func TestTickEndpoint(t *testing.T) {
 
 	const secret = "test-tick-secret"
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{})
-	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
+	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc, nil, decimal.Zero)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
 	claimSvc := game.NewClaimService(pool, game.RealClock{}, game.ClaimConfig{
 		BaseAmount:     decimal.NewFromInt(100),
 		BuffMultiplier: decimal.NewFromFloat(1.5),
 	})
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil)
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil, nil, nil)
 
 	// 深夜0時JST（セッション外）を固定で返すクロック。Tick はセッション外なら
 	// DBに触れず早期returnするため、この時刻なら pool が未接続でも 200 になる。

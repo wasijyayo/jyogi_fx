@@ -26,3 +26,14 @@ ORDER BY fire_tick;
 SELECT * FROM events
 WHERE currency_id = $1
 ORDER BY fire_tick;
+
+-- name: MarkEventTeased :exec
+-- 予兆メッセージ（design.md §5.3）を投稿できたら呼ぶ（#44 NOTIFY-2）。
+-- teased=FALSE の行にしかヒットしないため、Discord投稿に失敗して呼ばれなかった
+-- 場合は次tickで再試行される（冪等性。CLAUDE.md §5.5）。
+UPDATE events SET teased = TRUE WHERE id = $1 AND teased = FALSE;
+
+-- name: MarkEventResolved :exec
+-- 発火通知（design.md §5.4「resolvedは通知の冪等性のためだけに使う」）を投稿できたら呼ぶ。
+-- MarkEventTeasedと同じくWHERE句で二重更新を防ぐ。
+UPDATE events SET resolved = TRUE WHERE id = $1 AND resolved = FALSE;

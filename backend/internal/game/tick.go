@@ -30,10 +30,16 @@ type TickService struct {
 	// nil の場合は更新をスキップする（未設定環境・単体テストでの簡略化のため。
 	// 本番の main.go では必ず設定する）。
 	ticker *TickerService
+	// notify は#通知チャンネルへの自動通知（#44 NOTIFY-2）を担当する。tickerと同じく
+	// nilなら各通知をスキップする（tick_notify.goの各メソッド参照）。
+	notify *NotifyService
+	// ranking は日次まとめ（design.md §6.9）のランキング集計に使う。nilなら
+	// 日次まとめの資産ランキング部分をスキップする。
+	ranking *RankingService
 }
 
-func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService, claim *ClaimService, ticker *TickerService) *TickService {
-	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation, claim: claim, ticker: ticker}
+func NewTickService(pool *pgxpool.Pool, clock Clock, session *SessionService, liquidation *LiquidationService, claim *ClaimService, ticker *TickerService, notify *NotifyService, ranking *RankingService) *TickService {
+	return &TickService{pool: pool, clock: clock, session: session, liquidation: liquidation, claim: claim, ticker: ticker, notify: notify, ranking: ranking}
 }
 
 // updateTicker は市場ティッカーメッセージを更新する（design.md §4 手順5・#43）。
@@ -50,9 +56,9 @@ func (s *TickService) updateTicker(ctx context.Context, now time.Time, session d
 
 // Tick は毎分呼ばれる処理の入口（design.md §4「毎分tickが担当する処理」）。
 //
-//	1. イベントの予兆投稿 / 発火通知   → TODO(#44 NOTIFY-2)
-//	2. 指値・逆指値の約定判定          → TODO(#36/#37 TRADE-1/2)
-//	3. ロスカット判定                  → #38で実装
+//	1. イベントの予兆投稿 / 発火通知   → #44で実装（notifyEvents。tick_notify.go）
+//	2. 指値・逆指値の約定判定          → TODO(#36/#37 TRADE-1/2。成行注文のみ実装済み）
+//	3. ロスカット判定                  → #38で実装（#44でロスカット通知も追加）
 //	4. price_ticks 書き込み            → #35で実装。#40でイベント（shock/vol_up）の
 //	                                     価格反映もここに含めた（writePriceTickが
 //	                                     ListEventsByCurrencyを引いてBasePriceに渡す）
@@ -60,10 +66,13 @@ func (s *TickService) updateTicker(ctx context.Context, now time.Time, session d
 //
 // 手順1は「価格への反映」と「Discordへの通知」の2つに分かれており（design.md §5.4）、
 // 前者は手順4に含めて#40で実装済み。後者（予兆・発火のDiscord投稿。teased/resolved
-// フラグの更新）はteased/resolvedが価格計算では見ない冪等性専用フラグであるため
-// 別issue（#44）に切り出してある。該当する機能（Discord通知・指値注文）が
-// まだ実装されていないため、1（通知のみ）・2 は手順の位置だけを TODO
-// コメントとして残し、3・4・5 を実装する。
+// フラグの更新）は#44 NOTIFY-2で実装した（notifyEvents）。指値・逆指値注文自体が
+// まだ実装されていないため、2 だけは手順の位置だけを TODO コメントとして残す。
+//
+// このほか design.md §6.7 の自動通知のうち、セッション開始（寄り付きギャップ）・
+// セッション終了・日次まとめも#44でここから呼ぶ（tick_notify.go）。大口取引通知は
+// tickではなくTradeService.PlaceOrder自身が発火する（trade.goのLargeTrade関連コメント参照。
+// tick駆動ではなく取引駆動のため、ここには含まれない）。
 //
 // セッション外は何もしない（design.md §9.10/§9.12: 常時起動しない構成のため、
 // セッション外のtickは保存せず base(n) の再計算で賄う）。ロスカット判定
@@ -95,11 +104,20 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return fmt.Errorf("open session: %w", err)
 		}
+
+		// 通知（#44）に必要な通貨一覧。OpenSession自身は内部で全通貨をループする
+		// だけで一覧を返さないため、ここで改めて引く（安価な読み取りのみ）。
+		currencies, err := q.ListCurrencies(ctx)
+		if err != nil {
+			return fmt.Errorf("list currencies: %w", err)
+		}
+
 		// OpenSession が全通貨のpressureを0にリセットした直後にロスカット判定を
 		// 行うことで、「持ち越し建玉を翌日の寄り付きでまとめて判定する」
 		// （design.md §2.7 寄り付き処理順序6〜7・§7.1 B案）を実現する。
 		// 判定に使う価格は寄り付き価格（base(n)。pressureは0）になる。
-		if _, err := s.liquidation.LiquidateOpenPositions(ctx, now); err != nil {
+		liquidated, err := s.liquidation.LiquidateOpenPositions(ctx, now)
+		if err != nil {
 			return fmt.Errorf("liquidate open positions at opening: %w", err)
 		}
 		// 手順8（design.md §2.7）: 手順6〜7（含み損益再評価・清算判定）が終わった
@@ -113,6 +131,14 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		if err := RecordDailySnapshots(ctx, q, openedSession.ID, now); err != nil {
 			return fmt.Errorf("record daily asset snapshots: %w", err)
 		}
+
+		// #44 NOTIFY-2: 持ち越し建玉が寄り付きで清算された分の通知、
+		// 予兆tick=1件目（fire_tick=2のイベントの予兆はこのtickで出る）、
+		// 寄り付きギャップ通知（design.md §2.8「清算処理の後に1件」）の順で行う。
+		s.notifyLiquidations(ctx, q, currencies, liquidated)
+		s.notifyEvents(ctx, q, currencies, now)
+		s.notifySessionOpen(ctx, q, currencies)
+
 		// 寄り付き（本日最初のtick）でも市場ティッカーの初回投稿を行う
 		// （完了条件「セッション中、1つのメッセージが毎分更新され続けること」）。
 		s.updateTicker(ctx, now, openedSession)
@@ -126,7 +152,8 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 	// 管理する（#37のClosePositionを1ポジションずつ再利用するため。
 	// liquidation.go のコメント参照）ため、この後のtickの書き込みトランザクション
 	// より前・かつその外側で呼ぶ。
-	if _, err := s.liquidation.LiquidateOpenPositions(ctx, now); err != nil {
+	liquidated, err := s.liquidation.LiquidateOpenPositions(ctx, now)
+	if err != nil {
 		return fmt.Errorf("liquidate open positions: %w", err)
 	}
 
@@ -144,7 +171,6 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("list currencies: %w", err)
 	}
 
-	// TODO(#40 EVENT-1): イベントの予兆投稿 / 発火判定をここに追加する。
 	// TODO(#36/#37 TRADE-1/2): 指値・逆指値の約定判定をここに追加する。
 
 	for _, c := range currencies {
@@ -157,9 +183,20 @@ func (s *TickService) Tick(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("commit tx: %w", err)
 	}
 
+	// #44 NOTIFY-2: ロスカット通知・イベント予兆/発火通知は、コミット済みの
+	// price_ticks（イベント判定自体はeventsテーブルのみ見るため厳密には
+	// コミット前でも計算できるが、他の通知と足並みを揃えてコミット後に統一する）
+	// を前提に行う。
+	s.notifyLiquidations(ctx, q, currencies, liquidated)
+	s.notifyEvents(ctx, q, currencies, now)
+
 	// 手順5: コミット済みのprice_ticksを使って市場ティッカーを更新する
 	// （sparkline/変動率は直前に書き込んだ値を読み直す。ticker.goのtickerRow参照）。
 	s.updateTicker(ctx, now, gameSession)
+
+	// このtickがセッション最後のtickなら、セッション終了通知＋日次まとめを投稿する
+	// （design.md §6.7・§6.9）。closing_notifiedで冪等性を確保する（tick_notify.go）。
+	s.notifyClosingIfLastTick(ctx, q, gameSession, now)
 
 	return nil
 }
