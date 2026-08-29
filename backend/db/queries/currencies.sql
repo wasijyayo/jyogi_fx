@@ -5,6 +5,13 @@
 SELECT * FROM currencies
 ORDER BY id;
 
+-- name: GetCurrencyBySymbolForUpdate :one
+-- 取引処理でpressureを読み書きする前に行ロックを取る（同時注文によるpressure更新の
+-- lost update を防ぐ。#36 TRADE-1）。呼び出し側は必ずトランザクション内で使うこと。
+SELECT * FROM currencies
+WHERE symbol = $1
+FOR UPDATE;
+
 -- name: UpdateCurrencyPressure :exec
 -- 取引・tick処理で計算した新しい需給圧力を保存する（#33 PRICE-2）。
 -- pressure と pressure_at は必ずセットで更新する（Pressure()の減衰計算が
