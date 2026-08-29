@@ -91,6 +91,19 @@ func runServe() error {
 		return fmt.Errorf("TICK_SHARED_SECRET is not set")
 	}
 
+	// 市場ティッカー（design.md §6.4、#43 NOTIFY-1）用のBotトークンと投稿先チャンネル。
+	// register-commandsサブコマンドと違い、serve中は毎tickでこれを使うため
+	// ここでも同じくフェイルファストにする（未設定のまま動かすとtickのたびに
+	// エラーログが出続けるだけの静かな壊れ方になるため）。
+	discordBotToken := os.Getenv("DISCORD_BOT_TOKEN")
+	if discordBotToken == "" {
+		return fmt.Errorf("DISCORD_BOT_TOKEN is not set")
+	}
+	tickerChannelID := os.Getenv("DISCORD_TICKER_CHANNEL_ID")
+	if tickerChannelID == "" {
+		return fmt.Errorf("DISCORD_TICKER_CHANNEL_ID is not set")
+	}
+
 	// GAME_ALWAYS_OPEN=true で開発環境の「取引時間が常に開いている」モードを有効化する
 	// （CLAUDE.md §5.1）。本番では未設定のままにすること。
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{
@@ -115,7 +128,10 @@ func runServe() error {
 		BuffMultiplier: claimBuffMultiplier,
 	})
 
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc)
+	tickerSvc := game.NewTickerService(pool, game.RealClock{}, discord.MessagesConfig{
+		BotToken: discordBotToken,
+	}, tickerChannelID)
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc, tickerSvc)
 
 	rankingSvc := game.NewRankingService(pool, game.RealClock{})
 	profileSvc := game.NewProfileService(pool, game.RealClock{}, rankingSvc)

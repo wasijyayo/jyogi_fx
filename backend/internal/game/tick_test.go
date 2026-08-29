@@ -21,7 +21,7 @@ func TestTick_セッション外は何もしない(t *testing.T) {
 		BaseAmount:     decimal.NewFromInt(100),
 		BuffMultiplier: decimal.NewFromFloat(1.5),
 	})
-	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc, claimSvc)
+	tickSvc := NewTickService(nil, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil)
 
 	now := time.Date(2026, 1, 1, 3, 0, 0, 0, jst) // 深夜3時JST。セッション外。
 	if err := tickSvc.Tick(context.Background(), now); err != nil {
