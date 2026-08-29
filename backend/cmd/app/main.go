@@ -82,10 +82,27 @@ func runServe() error {
 		return fmt.Errorf("DISCORD_PUBLIC_KEY: %w", err)
 	}
 
+	// /internal/tick の保護用共有シークレット（design.md §4）。
+	// 未設定のまま起動を通すと「シークレット未設定=誰でも叩ける」という
+	// 最悪の状態になりうるため、DISCORD_PUBLIC_KEY と同じくフェイルファストにする。
+	tickSharedSecret := os.Getenv("TICK_SHARED_SECRET")
+	if tickSharedSecret == "" {
+		return fmt.Errorf("TICK_SHARED_SECRET is not set")
+	}
+
+	// GAME_ALWAYS_OPEN=true で開発環境の「取引時間が常に開いている」モードを有効化する
+	// （CLAUDE.md §5.1）。本番では未設定のままにすること。
+	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{
+		AlwaysOpen: os.Getenv("GAME_ALWAYS_OPEN") == "true",
+	})
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc)
+
 	mux := server.NewMux(server.Config{
 		Auth:             authSvc,
+		Tick:             tickSvc,
 		SecureCookies:    secureCookies,
 		DiscordPublicKey: discordPublicKey,
+		TickSharedSecret: tickSharedSecret,
 	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
