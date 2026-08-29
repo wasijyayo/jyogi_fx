@@ -17,7 +17,7 @@ import (
 )
 
 // lastNewOrderMinuteJST は「終了1分前」の開始分（12:59）。この分に入ったら
-// 新規注文を受け付けない（確定 #14/#48。design.md §7.9）。
+// 新規注文を受け付けない（確定 #14/#48。design.md §7.10）。
 // 決済（クローズ）はこの時間帯も許可する仕様のため、この定数・関連関数を
 // 決済可否の判定に使い回さないこと。
 const lastNewOrderMinuteJST = sessionStartMinuteJST + sessionDurationMinutes - 1
@@ -41,7 +41,7 @@ func (cfg SessionConfig) IsSessionOpen(now time.Time) bool {
 }
 
 // IsNewOrderAllowed はセッション中かつ終了1分前（12:59台）を過ぎていないかを返す
-// （確定 #14/#48。design.md §7.9「駆け込み取引の制限」）。
+// （確定 #14/#48。design.md §7.10「駆け込み取引の制限」）。
 //
 // **新規注文にのみ使うこと。** 既存ポジションの決済（クローズ）は同時間帯も
 // 許可する仕様のため、決済可否の判定にこの関数を使ってはいけない。

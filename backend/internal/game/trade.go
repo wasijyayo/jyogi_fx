@@ -35,7 +35,7 @@ var (
 	// （design.md §7.0「レバレッジ上限: 10倍」・§2.9 通貨別上書き）。
 	ErrLeverageExceedsMax = errors.New("leverage exceeds currency max_leverage")
 	// ErrNewOrdersClosed はセッション外・終了1分前で新規注文が拒否される場合に返る
-	// （確定 #14/#48。design.md §7.9）。
+	// （確定 #14/#48。design.md §7.10）。
 	ErrNewOrdersClosed = errors.New("new orders are not accepted outside the trading window")
 	// ErrUserNotFound は該当ユーザーが存在しない場合に返る。
 	ErrUserNotFound = errors.New("user not found")
@@ -113,7 +113,7 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 		return PlaceOrderResult{}, ErrInvalidLeverage
 	}
 	// セッション外・終了1分前は新規注文を拒否する（確定#14/#48。#34の判定を使う）。
-	// 決済（#37）にはこの判定を使い回さないこと（design.md §7.9）。
+	// 決済（#37）にはこの判定を使い回さないこと（design.md §7.10）。
 	if !s.session.IsNewOrderAllowed(now) {
 		return PlaceOrderResult{}, ErrNewOrdersClosed
 	}
@@ -236,7 +236,7 @@ type ClosePositionResult struct {
 }
 
 // ClosePosition は既存ポジションを決済し、損益を確定する（#37 TRADE-2。
-// design.md §7.3/§2.2/§7.9）。
+// design.md §7.3/§2.2/§7.10）。
 //
 // 手順:
 //  1. ポジションをユーザーIDで絞ってロック取得する（他人のポジションは
@@ -253,7 +253,7 @@ type ClosePositionResult struct {
 //  8. 反対売買としての需給圧力インパクトを反映する（#33 UpdatePressure。design.md §2.2）
 //
 // セッション時間による制限はしない。既存ポジションの決済はセッション外・
-// 終了1分前（12:59台）を含め常に許可する（確定#48。design.md §7.9）。
+// 終了1分前（12:59台）を含め常に許可する（確定#48。design.md §7.10）。
 // PlaceOrder の IsNewOrderAllowed をここで使い回さないこと。
 //
 // 必ず1トランザクションで囲む（dev-guide.md §3）。

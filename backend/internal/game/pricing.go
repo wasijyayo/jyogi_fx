@@ -18,7 +18,7 @@ var jst = time.FixedZone("JST", 9*60*60)
 
 const (
 	// sessionStartMinuteJST / sessionDurationMinutes: 取引時間は JST 12:00〜13:00
-	// （確定 #13。docs/design.md §7.9 他）。
+	// （確定 #13。docs/design.md §7.10 他）。
 	sessionStartMinuteJST  = 12 * 60
 	sessionDurationMinutes = 60
 	minutesPerDay          = 24 * 60

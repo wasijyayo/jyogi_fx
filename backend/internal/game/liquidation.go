@@ -24,7 +24,7 @@ import (
 var maintenanceMarginRatio = decimal.NewFromFloat(0.5)
 
 // LiquidationService はロスカット（強制決済）判定を担当する（#38 TRADE-3。
-// design.md §7.1「持ち越し可・セッション外は判定しない」・§7.8「約定は即時ではない」）。
+// design.md §7.1「持ち越し可・セッション外は判定しない」・§7.9「約定は即時ではない」）。
 //
 // CLAUDE.md §4「4つの入口はすべて同じサービス層を呼ぶ」に従い、決済処理自体は
 // 二重実装せず #37 の TradeService.ClosePosition をそのまま呼び出す。
