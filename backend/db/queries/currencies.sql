@@ -12,6 +12,14 @@ SELECT * FROM currencies
 WHERE symbol = $1
 FOR UPDATE;
 
+-- name: GetCurrencyByIDForUpdate :one
+-- 決済処理で通貨をIDでロックする（#37 TRADE-2）。positions.currency_id はsymbolでなく
+-- IDで持っているため、GetCurrencyBySymbolForUpdateとは別に用意する。
+-- 呼び出し側は必ずトランザクション内で使うこと。
+SELECT * FROM currencies
+WHERE id = $1
+FOR UPDATE;
+
 -- name: UpdateCurrencyPressure :exec
 -- 取引・tick処理で計算した新しい需給圧力を保存する（#33 PRICE-2）。
 -- pressure と pressure_at は必ずセットで更新する（Pressure()の減衰計算が

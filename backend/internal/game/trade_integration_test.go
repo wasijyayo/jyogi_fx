@@ -3,9 +3,11 @@ package game
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
 
 	"fxgame/backend/internal/db"
@@ -310,5 +312,304 @@ func TestPlaceOrder_拒否された注文は残高もポジションも変化し
 				t.Errorf("拒否された注文の後でpressureが変化した: %s, want %s", gotCurrency.Pressure, c.Pressure)
 			}
 		})
+	}
+}
+
+// TestClosePosition_損益が計算され残高と圧力に反映される は #37 の完了条件
+// 「建玉→決済で損益が正しく残高に反映されること」を、long/short × 含み益/含み損の
+// 4パターンで確認する。self-impact（自分の注文自身の圧力インパクト）に頼ると
+// 常に「即決済で得をする」方向にしか動かせないため、建玉直後に圧力を意図的な値へ
+// 上書きし、含み損パターンも再現できるようにしている。
+func TestClosePosition_損益が計算され残高と圧力に反映される(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+
+	tests := []struct {
+		name             string
+		side             Side
+		pressureOverride decimal.Decimal // 建玉直後に上書きする圧力（決済価格をこれで動かす）
+	}{
+		{"ロング+含み益(価格上昇)", SideLong, decimal.NewFromFloat(0.02)},
+		{"ロング+含み損(価格下落)", SideLong, decimal.NewFromFloat(-0.02)},
+		{"ショート+含み益(価格下落)", SideShort, decimal.NewFromFloat(-0.02)},
+		{"ショート+含み損(価格上昇)", SideShort, decimal.NewFromFloat(0.02)},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			symbol := fmt.Sprintf("TRADECLOSE%d", i)
+			epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+			c := insertTestCurrency(t, ctx, pool, symbol, 999200+int64(i), epoch)
+
+			userID := fmt.Sprintf("test-trade-close-user-%d", i)
+			_, _ = pool.Exec(ctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+			_, _ = pool.Exec(ctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+			_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+
+			before := decimal.NewFromInt(1000)
+			setupTradeTestUser(t, ctx, q, userID, before)
+
+			t.Cleanup(func() {
+				cctx := context.Background()
+				_, _ = pool.Exec(cctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+				_, _ = pool.Exec(cctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+				_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+				_, _ = pool.Exec(cctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+			})
+
+			now := epoch
+			size := decimal.NewFromInt(10)
+			leverage := decimal.NewFromInt(5)
+
+			openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
+				UserID: userID, CurrencySymbol: symbol, Side: tt.side, Size: size, Leverage: leverage,
+			})
+			if err != nil {
+				t.Fatalf("PlaceOrder: %v", err)
+			}
+			entryPrice := openResult.Position.EntryPrice
+			balanceAfterOpen := openResult.NewBalance
+
+			// 建玉直後の圧力を意図的な値へ上書きする（self-impactに頼らず含み損も再現するため）。
+			if err := q.UpdateCurrencyPressure(ctx, db.UpdateCurrencyPressureParams{
+				ID: c.ID, Pressure: tt.pressureOverride, PressureAt: pgtype.Timestamptz{Time: now, Valid: true},
+			}); err != nil {
+				t.Fatalf("UpdateCurrencyPressure: %v", err)
+			}
+			exitPrice := entryPrice.Mul(decimal.NewFromInt(1).Add(tt.pressureOverride))
+
+			closeResult, err := tradeSvc.ClosePosition(ctx, now, ClosePositionParams{
+				UserID: userID, PositionID: openResult.Position.ID,
+			})
+			if err != nil {
+				t.Fatalf("ClosePosition: %v", err)
+			}
+
+			priceDiff := exitPrice.Sub(entryPrice)
+			if tt.side == SideShort {
+				priceDiff = priceDiff.Neg()
+			}
+			wantPnl := priceDiff.Mul(size)
+			wantMargin := size.Mul(entryPrice).Div(leverage)
+			wantNotionalExit := size.Mul(exitPrice)
+			wantFee := wantNotionalExit.Mul(c.FeeRate)
+			wantBalance := balanceAfterOpen.Add(wantMargin).Add(wantPnl).Sub(wantFee)
+
+			// --- 完了条件: 損益が正しく残高に反映される ---
+			if !closeResult.Position.Pnl.Valid || !closeResult.Position.Pnl.Decimal.Equal(wantPnl) {
+				t.Errorf("pnl = %+v, want %s", closeResult.Position.Pnl, wantPnl)
+			}
+			if !closeResult.Position.ClosedAt.Valid {
+				t.Error("ClosedAtが設定されていない")
+			}
+			if !closeResult.NewBalance.Equal(wantBalance) {
+				t.Errorf("返り値の残高 = %s, want %s", closeResult.NewBalance, wantBalance)
+			}
+			gotUser, err := q.GetUserForUpdate(ctx, userID)
+			if err != nil {
+				t.Fatalf("GetUserForUpdate: %v", err)
+			}
+			if !gotUser.Balance.Equal(wantBalance) {
+				t.Errorf("DB上の残高 = %s, want %s", gotUser.Balance, wantBalance)
+			}
+
+			// --- trades行が反対売買として記録される ---
+			wantCloseSide := SideShort
+			if tt.side == SideShort {
+				wantCloseSide = SideLong
+			}
+			if closeResult.Trade.Side != string(wantCloseSide) {
+				t.Errorf("Trade.Side = %s, want %s（反対売買）", closeResult.Trade.Side, wantCloseSide)
+			}
+			if !closeResult.Trade.PositionID.Valid || closeResult.Trade.PositionID.Int64 != openResult.Position.ID {
+				t.Errorf("Trade.PositionID = %+v, want %d", closeResult.Trade.PositionID, openResult.Position.ID)
+			}
+			if !closeResult.Trade.Price.Equal(exitPrice) {
+				t.Errorf("Trade.Price = %s, want %s", closeResult.Trade.Price, exitPrice)
+			}
+			if !closeResult.Trade.Fee.Equal(wantFee) {
+				t.Errorf("Trade.Fee = %s, want %s", closeResult.Trade.Fee, wantFee)
+			}
+
+			// --- 完了条件: 決済も需給圧力を動かす（design.md §2.2） ---
+			wantSignedVolume := wantNotionalExit
+			if wantCloseSide == SideShort {
+				wantSignedVolume = wantNotionalExit.Neg()
+			}
+			wantPressureAfterClose := tt.pressureOverride.Add(c.K.Mul(wantSignedVolume).Div(c.Liquidity))
+			gotCurrency, err := q.GetCurrencyByIDForUpdate(ctx, c.ID)
+			if err != nil {
+				t.Fatalf("GetCurrencyByIDForUpdate: %v", err)
+			}
+			if diff := gotCurrency.Pressure.Sub(wantPressureAfterClose).Abs(); diff.GreaterThan(decimal.NewFromFloat(0.00000001)) {
+				t.Errorf("決済後のpressure = %s, want %s", gotCurrency.Pressure, wantPressureAfterClose)
+			}
+		})
+	}
+}
+
+// TestClosePosition_他人のポジションは決済できない は #37 の完了条件
+// 「他人の建玉を決済できないこと」を確認する。
+func TestClosePosition_他人のポジションは決済できない(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	c := insertTestCurrency(t, ctx, pool, "TRADECLOSEOWNER", 999210, epoch)
+
+	ownerID := "test-trade-close-owner"
+	intruderID := "test-trade-close-intruder"
+	for _, uid := range []string{ownerID, intruderID} {
+		_, _ = pool.Exec(ctx, `DELETE FROM trades WHERE user_id = $1`, uid)
+		_, _ = pool.Exec(ctx, `DELETE FROM positions WHERE user_id = $1`, uid)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, uid)
+	}
+
+	before := decimal.NewFromInt(1000)
+	setupTradeTestUser(t, ctx, q, ownerID, before)
+	setupTradeTestUser(t, ctx, q, intruderID, before)
+
+	t.Cleanup(func() {
+		cctx := context.Background()
+		for _, uid := range []string{ownerID, intruderID} {
+			_, _ = pool.Exec(cctx, `DELETE FROM trades WHERE user_id = $1`, uid)
+			_, _ = pool.Exec(cctx, `DELETE FROM positions WHERE user_id = $1`, uid)
+			_, _ = pool.Exec(cctx, `DELETE FROM users WHERE discord_id = $1`, uid)
+		}
+		_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+	})
+
+	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	now := epoch
+
+	openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
+		UserID: ownerID, CurrencySymbol: "TRADECLOSEOWNER", Side: SideLong,
+		Size: decimal.NewFromInt(10), Leverage: decimal.NewFromInt(5),
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	_, err = tradeSvc.ClosePosition(ctx, now, ClosePositionParams{
+		UserID: intruderID, PositionID: openResult.Position.ID,
+	})
+	if !errors.Is(err, ErrPositionNotFound) {
+		t.Fatalf("ClosePosition error = %v, want %v", err, ErrPositionNotFound)
+	}
+
+	gotPosition, err := q.GetPositionForUpdate(ctx, db.GetPositionForUpdateParams{ID: openResult.Position.ID, UserID: ownerID})
+	if err != nil {
+		t.Fatalf("GetPositionForUpdate: %v", err)
+	}
+	if gotPosition.ClosedAt.Valid {
+		t.Error("他人による決済でポジションが決済済みになった")
+	}
+
+	gotOwner, err := q.GetUserForUpdate(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("GetUserForUpdate(owner): %v", err)
+	}
+	if !gotOwner.Balance.Equal(openResult.NewBalance) {
+		t.Errorf("他人による決済で持ち主の残高が変化した: %s, want %s", gotOwner.Balance, openResult.NewBalance)
+	}
+	gotIntruder, err := q.GetUserForUpdate(ctx, intruderID)
+	if err != nil {
+		t.Fatalf("GetUserForUpdate(intruder): %v", err)
+	}
+	if !gotIntruder.Balance.Equal(before) {
+		t.Errorf("拒否された決済で侵入者の残高が変化した: %s, want %s", gotIntruder.Balance, before)
+	}
+}
+
+// TestClosePosition_存在しないポジションはエラーになる は不正な positionID を渡した場合を確認する。
+func TestClosePosition_存在しないポジションはエラーになる(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	userID := "test-trade-close-nonexistent-user"
+	_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+	setupTradeTestUser(t, ctx, q, userID, decimal.NewFromInt(1000))
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE discord_id = $1`, userID)
+	})
+
+	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+
+	_, err := tradeSvc.ClosePosition(context.Background(), time.Now(), ClosePositionParams{
+		UserID: userID, PositionID: 999999999,
+	})
+	if !errors.Is(err, ErrPositionNotFound) {
+		t.Fatalf("ClosePosition error = %v, want %v", err, ErrPositionNotFound)
+	}
+}
+
+// TestClosePosition_決済済みポジションは再決済できない は tick の重複実行同様、
+// 決済の二重発火を防げていることを確認する（closed_atのNULLチェック）。
+func TestClosePosition_決済済みポジションは再決済できない(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+	q := db.New(pool)
+
+	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	c := insertTestCurrency(t, ctx, pool, "TRADECLOSETWICE", 999211, epoch)
+
+	userID := "test-trade-close-twice-user"
+	_, _ = pool.Exec(ctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+	_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+
+	setupTradeTestUser(t, ctx, q, userID, decimal.NewFromInt(1000))
+	t.Cleanup(func() {
+		cctx := context.Background()
+		_, _ = pool.Exec(cctx, `DELETE FROM trades WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cctx, `DELETE FROM positions WHERE user_id = $1`, userID)
+		_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+		_, _ = pool.Exec(cctx, `DELETE FROM users WHERE discord_id = $1`, userID)
+	})
+
+	sessionSvc := NewSessionService(pool, RealClock{}, SessionConfig{})
+	tradeSvc := NewTradeService(pool, RealClock{}, sessionSvc)
+	now := epoch
+
+	openResult, err := tradeSvc.PlaceOrder(ctx, now, PlaceOrderParams{
+		UserID: userID, CurrencySymbol: "TRADECLOSETWICE", Side: SideLong,
+		Size: decimal.NewFromInt(10), Leverage: decimal.NewFromInt(5),
+	})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+
+	firstResult, err := tradeSvc.ClosePosition(ctx, now, ClosePositionParams{
+		UserID: userID, PositionID: openResult.Position.ID,
+	})
+	if err != nil {
+		t.Fatalf("1回目のClosePosition: %v", err)
+	}
+
+	_, err = tradeSvc.ClosePosition(ctx, now.Add(time.Minute), ClosePositionParams{
+		UserID: userID, PositionID: openResult.Position.ID,
+	})
+	if !errors.Is(err, ErrPositionAlreadyClosed) {
+		t.Fatalf("2回目のClosePosition error = %v, want %v", err, ErrPositionAlreadyClosed)
+	}
+
+	gotUser, err := q.GetUserForUpdate(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetUserForUpdate: %v", err)
+	}
+	if !gotUser.Balance.Equal(firstResult.NewBalance) {
+		t.Errorf("2回目の決済(失敗するはず)で残高が二重に変化した: %s, want %s", gotUser.Balance, firstResult.NewBalance)
 	}
 }
