@@ -135,13 +135,7 @@ func (s *LiquidationService) LiquidateOpenPositions(ctx context.Context, now tim
 // 0.5/L になる。L=10 なら 5.0%（design.md §7.4「清算距離の導出」の表と一致）。
 func ShouldLiquidate(p db.Position, currentPrice decimal.Decimal) bool {
 	requiredMargin := p.Size.Mul(p.EntryPrice).Div(p.Leverage)
-
-	priceDiff := currentPrice.Sub(p.EntryPrice)
-	if Side(p.Side) == SideShort {
-		priceDiff = priceDiff.Neg()
-	}
-	pnl := priceDiff.Mul(p.Size)
-
+	pnl := PositionPnL(p, currentPrice)
 	equity := requiredMargin.Add(pnl)
 	maintenanceMargin := requiredMargin.Mul(maintenanceMarginRatio)
 

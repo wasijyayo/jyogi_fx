@@ -13,6 +13,14 @@ RETURNING *;
 -- 毎分tick（#35 TICK-1）が「本日のセッションは寄り付き済みか」を判定するために使う。
 -- 行が無ければ呼び出し側は pgx.ErrNoRows を見て OpenSession（寄り付き処理）を実行する。
 -- 既に開いている日はここで見つかるため、寄り付き処理（pressureリセット等）を
--- 毎分繰り返してしまうことを防げる。
+-- 毎分繰り返してしまうことを防げる。/claim（#39）も同じクエリで当日行を引き、
+-- claim_median 列（NULL なら中央値算出前）を見て利用可否を判定する。
 SELECT * FROM game_sessions
 WHERE date = $1;
+
+-- name: UpdateGameSessionClaimMedian :exec
+-- 寄り付き処理の手順8（design.md §2.7）で、含み損益再評価・清算判定（手順6〜7）の
+-- 「後」に呼ぶこと。全登録者の総資産の中央値をここで確定させる（#39 ECON-1）。
+UPDATE game_sessions
+SET claim_median = $2
+WHERE id = $1;

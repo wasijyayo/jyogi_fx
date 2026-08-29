@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"fxgame/backend/internal/game"
 	"fxgame/backend/internal/server"
@@ -52,7 +53,11 @@ func TestTickEndpoint(t *testing.T) {
 	sessionSvc := game.NewSessionService(pool, game.RealClock{}, game.SessionConfig{})
 	tradeSvc := game.NewTradeService(pool, game.RealClock{}, sessionSvc)
 	liquidationSvc := game.NewLiquidationService(pool, game.RealClock{}, tradeSvc)
-	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc)
+	claimSvc := game.NewClaimService(pool, game.RealClock{}, game.ClaimConfig{
+		BaseAmount:     decimal.NewFromInt(100),
+		BuffMultiplier: decimal.NewFromFloat(1.5),
+	})
+	tickSvc := game.NewTickService(pool, game.RealClock{}, sessionSvc, liquidationSvc, claimSvc)
 
 	// 深夜0時JST（セッション外）を固定で返すクロック。Tick はセッション外なら
 	// DBに触れず早期returnするため、この時刻なら pool が未接続でも 200 になる。
