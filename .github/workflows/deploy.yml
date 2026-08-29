@@ -1,0 +1,87 @@
+name: Deploy
+
+# issue #70 [DEPLOY-2] の完了条件「mainブランチへのマージだけで本番Cloud Runに
+# 新しいコードが反映されること」を実現する。
+#
+# CIワークフロー（ci.yml）がmainへのpushで成功した後にだけ走る（workflow_run）。
+# ci.ymlはpull_requestでも動くが、その場合のhead_branchはPR元ブランチになるため
+# 下のif（head_branch == 'main'）で自然に除外される。
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      vars.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
+
+    # Cloud Run実行時に必要な環境変数・シークレット（DATABASE_URL・DISCORD_*・
+    # TICK_SHARED_SECRET等）はこのワークフローでは一切扱わない。
+    # `gcloud run deploy`はenv系フラグを付けなければ既存リビジョンの環境変数を
+    # そのまま引き継ぐ（Cloud Runの仕様）ため、このワークフローの役目は
+    # 「コードを新しくする」ことだけに絞ってある。環境変数自体の変更は
+    # 引き続き `gcloud run services update` を手動で行う（dev-guide.md §2.1参照）。
+    #
+    # 2026-08-29時点の既知の注意: #43/#44で追加した DISCORD_TICKER_CHANNEL_ID・
+    # DISCORD_NOTIFY_CHANNEL_ID は本番Cloud Runにまだ設定されていない
+    # （main.goがフェイルファストで必須化しているため、これらを設定する前に
+    # このワークフローで新しいコードをデプロイするとサービスが起動しなくなる）。
+    # 有効化する前に必ず手動で設定を追加すること。
+
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federationに必要
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_runイベントはデフォルトでdefaultブランチの最新をcheckoutする
+          # ため、CIが実際に検証したコミットを明示的に指定する。
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Add Go bin dir to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # デプロイ対象のバックエンド生成コード（internal/apigen・internal/db）を
+      # ローカルに用意する。.gcloudignoreのコメントのとおり、gcloudは.gitignoreを
+      # 尊重しないため、ここで生成しておかないとCloud Buildが
+      # 「package ... is not in std」で失敗する（dev-guide.md §2.1「ハマりどころ」）。
+      # フロントエンド（npm run gen && npm run build）はDockerfile内のマルチステージ
+      # ビルドで行うため、ここでは不要。
+      - name: Install sqlc
+        uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.31.1"
+
+      - name: Install oapi-codegen
+        run: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0
+
+      - name: Generate backend code (oapi-codegen + sqlc)
+        run: |
+          oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
+          (cd backend && sqlc generate)
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy fxgame --source . \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region asia-northeast1 \
+            --allow-unauthenticated \
+            --quiet

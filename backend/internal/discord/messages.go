@@ -64,7 +64,7 @@ func DeleteMessage(ctx context.Context, cfg MessagesConfig, channelID, messageID
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Discord は削除成功時に 204 No Content を返す。
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
@@ -100,7 +100,7 @@ func sendChannelMessage(ctx context.Context, cfg MessagesConfig, method, url, co
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

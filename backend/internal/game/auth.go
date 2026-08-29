@@ -90,7 +90,7 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 	if err != nil {
 		return Session{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := db.New(tx)
 

@@ -70,8 +70,8 @@ Discord Developer Portal への Interactions Endpoint URL 登録も完了して�
 
 CI/CD の自動化は**手動デプロイが 1 回成功してから**。
 先に組むと失敗時の原因切り分けができない。
-→ 手動デプロイは成功済みだが、**CI（GitHub Actions）はまだ未構築**（`.github/` が無い）。
-§4 の内容を組むのが次の候補。
+→ 手動デプロイは成功済み。**CI/CD（GitHub Actions）は #70 [DEPLOY-2] で構築済み**
+（`.github/workflows/ci.yml`・`.github/workflows/deploy.yml`）。詳細は §4 参照。
 
 進捗は GitHub Issues で追跡している。
 
@@ -175,12 +175,26 @@ DISCORD_CLIENT_SECRET: ...
 DISCORD_PUBLIC_KEY: ...
 DISCORD_BOT_TOKEN: ...
 DISCORD_REDIRECT_URI: https://<本番URL>/auth/discord/callback
+TICK_SHARED_SECRET: ...
+DISCORD_TICKER_CHANNEL_ID: ...       # #43 NOTIFY-1。未設定だと起動時にフェイルファストで落ちる
+DISCORD_NOTIFY_CHANNEL_ID: ...       # #44 NOTIFY-2。同上
+# 以下は未設定でもデフォルト値で起動する（main.goのdecimalEnv参照）
+LARGE_TRADE_IMPACT_PERCENT: 2
+CLAIM_BASE_AMOUNT: 100
+CLAIM_MEDIAN_BUFF_MULTIPLIER: 1.5
 ```
 
 ```bash
 gcloud run deploy fxgame --source . --region asia-northeast1 \
   --allow-unauthenticated --env-vars-file /tmp/cloudrun-env.yaml
 ```
+
+**`DISCORD_TICKER_CHANNEL_ID` / `DISCORD_NOTIFY_CHANNEL_ID` は #43/#44 で追加され、
+未設定だと `main.go` が起動時にフェイルファストでエラー終了する。** #70 で構築した
+`deploy.yml`（後述 §4.1）は`--env-vars-file`を使わず既存リビジョンの環境変数を
+引き継ぐだけなので、**これらを一度も設定していない状態で自動デプロイを有効化すると
+本番サービスが起動しなくなる。** 有効化前に上記コマンド（`--env-vars-file`指定）で
+最低1回、手動で設定しておくこと。
 
 ### ハマりどころ
 
@@ -246,11 +260,49 @@ func (s *Service) PlaceOrder(ctx context.Context, ...) error {
 
 ---
 
-## 4. CI
+## 4. CI/CD（#70 DEPLOY-2 で構築済み）
 
-GitHub Actions で以下を回す。
+### `.github/workflows/ci.yml`
 
+PR・`main`へのpushで以下を回す（`make`が無い環境でも動くよう、`make gen`の中身を
+直接展開してある）。Postgresは`services:`のコンテナを使う（ローカルのcompose.yamlと
+同じ`postgres:16-alpine`・`app`/`app`/`fxgame`）ため、`testcontainers`は導入していない。
+
+- コード生成（oapi-codegen + sqlc + orval）
+- **生成コードの差分チェック**: `git diff --exit-code`
+  （スキーマを変えたのに生成し忘れた状態を弾く。ただし `internal/db`・`internal/apigen`・
+  `frontend/src/api/generated` は `.gitignore` 対象のため、現状はこのチェックが
+  実質的に「生成コマンド自体がエラーなく完走するか」の確認になる）
+- マイグレーション適用
 - `go vet` / `golangci-lint`
-- `go test`
-- **生成コードの差分チェック**: `make gen && git diff --exit-code`
-  （スキーマを変えたのに生成し忘れた状態を弾く）
+- `go test`（サービスコンテナのPostgresに接続するため、統合テストもスキップされず実際に走る）
+
+マージのブロックは、GitHub側のブランチ保護ルールで`ci`ジョブを必須ステータス
+チェックに指定することで行う（リポジトリ設定 → Branches → `main`）。
+
+### `.github/workflows/deploy.yml`
+
+`ci.yml`が`main`へのpushで成功した後にだけ`workflow_run`で起動し、
+`gcloud run deploy fxgame --source .`を実行する（§2.1と同じコマンド）。
+Cloud Run実行時の環境変数（`DATABASE_URL`・`DISCORD_*`等）はここでは一切触らない
+（env系フラグを付けなければ既存リビジョンの値を引き継ぐCloud Runの仕様を利用している）。
+
+**有効化に必要なリポジトリ変数（Secretsではなく Variables。Settings → Secrets and
+variables → Actions → Variables）:**
+
+| 変数名 | 内容 |
+|---|---|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Workload Identity Federationのプロバイダのフルリソース名 |
+| `GCP_SERVICE_ACCOUNT` | デプロイに使うサービスアカウントのメールアドレス |
+| `GCP_PROJECT_ID` | `jyogi-fx` |
+
+いずれか（`GCP_WORKLOAD_IDENTITY_PROVIDER`）が未設定の間、`deploy`ジョブは自動的に
+スキップされる（失敗はしない）。長期有効なサービスアカウントJSONキーより安全な
+**Workload Identity Federationを使う**（GitHub Actions公式ドキュメント参照。
+`google-github-actions/auth`のGCP側セットアップ手順に従い、このリポジトリ
+（`wasijyayo/jyogi_fx`）の`main`ブランチからの`workflow_run`をtrustする
+Attribute Conditionを設定すること）。
+
+**有効化する前に必ず確認すること**: §2.1に書いたとおり、`DISCORD_TICKER_CHANNEL_ID`・
+`DISCORD_NOTIFY_CHANNEL_ID`が本番Cloud Runにまだ設定されていない場合、自動デプロイで
+サービスが起動しなくなる。

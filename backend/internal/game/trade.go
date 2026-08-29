@@ -143,7 +143,7 @@ func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrd
 	if err != nil {
 		return PlaceOrderResult{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	q := db.New(tx)
 
 	// ユーザー→通貨の順で行ロックを取得する。全呼び出しでこの順序を固定することで、
@@ -304,7 +304,7 @@ func (s *TradeService) ClosePosition(ctx context.Context, now time.Time, p Close
 	if err != nil {
 		return ClosePositionResult{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	q := db.New(tx)
 
 	// ポジション→ユーザー→通貨の順でロックを取得する。position は既存行のIDで
