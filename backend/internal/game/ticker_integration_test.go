@@ -103,6 +103,13 @@ func TestTickerService_Update(t *testing.T) {
 	if !strings.Contains(lastContent, tickerDivider) {
 		t.Errorf("content に区切り線が含まれない: %s", lastContent)
 	}
+	// 通貨の行の間に空行が入っていること（issue #75。スパークラインが最大の
+	// 高さ（█）になると行同士が詰まって見づらいというフィードバックへの対応）。
+	// 実通貨（JOG/WASI/CHEBU）+テスト用通貨で複数行あるため、コードブロック内に
+	// 空行（連続する改行）が最低1箇所はあるはず。
+	if !strings.Contains(lastContent, "\n\n") {
+		t.Errorf("通貨の行の間に空行が無い: %s", lastContent)
+	}
 
 	saved, err := q.GetGameSessionByDate(ctx, sessionDate)
 	if err != nil {
