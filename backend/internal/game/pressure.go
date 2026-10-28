@@ -28,7 +28,7 @@ func Pressure(c db.Currency, now time.Time) decimal.Decimal {
 		return c.Pressure
 	}
 
-	decay := math.Exp(-c.Lambda.InexactFloat64() * elapsed.Minutes())
+	decay := math.Exp(-c.Lambda.InexactFloat64() * elapsed.Minutes()) //nolint:forbidigo // exp は decimal で計算できない。結果は decimal に戻す
 	return c.Pressure.Mul(decimal.NewFromFloat(decay))
 }
 

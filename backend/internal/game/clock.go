@@ -12,4 +12,4 @@ type Clock interface {
 // RealClock は本番用の実装。system-clock をそのまま返す。
 type RealClock struct{}
 
-func (RealClock) Now() time.Time { return time.Now() }
+func (RealClock) Now() time.Time { return time.Now() } //nolint:forbidigo // Clock の本番実装。time.Now() を呼んでよい唯一の箇所
