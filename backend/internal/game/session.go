@@ -137,7 +137,7 @@ func (s *SessionService) OpenSession(ctx context.Context, now time.Time) (db.Gam
 	if err != nil {
 		return db.GameSession{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := db.New(tx)
 

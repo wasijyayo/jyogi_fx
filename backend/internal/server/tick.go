@@ -43,7 +43,7 @@ func handleTick(cfg Config) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}
 }
 

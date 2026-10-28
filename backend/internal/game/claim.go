@@ -147,7 +147,7 @@ func (s *ClaimService) Claim(ctx context.Context, now time.Time, userID string) 
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	txq := db.New(tx)
 
 	user, err := txq.GetUserForUpdate(ctx, userID)
