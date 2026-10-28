@@ -4,7 +4,8 @@
 # 上書きできる環境変数:
 #   BRANCH_PREFIX  ブランチ名の接頭辞（既定: git config user.name）
 #   WORKTREE_ROOT  worktree を作る親ディレクトリ（既定: メインの checkout と同じ階層）
-#   DB_CONTAINER   ローカル Postgres のコンテナ名（既定: 5432 番を公開しているコンテナ）
+#   DB_CONTAINER   ローカル Postgres のコンテナ名（既定: compose の db サービスで 5432 番を公開しているもの）。
+#                  接続先は localhost:5432 固定なので、5432 番を公開しているコンテナを指定すること
 
 set -euo pipefail
 
@@ -25,7 +26,8 @@ worktree="${WORKTREE_ROOT:-$(dirname "$main_root")}/$(basename "$main_root")-iss
 db_name="fxgame_issue$issue"
 db_url="postgres://app:app@localhost:5432/$db_name?sslmode=disable"
 
-db_container="${DB_CONTAINER:-$(docker ps --filter publish=5432 --format '{{.Names}}' | head -n 1)}"
+# 別プロジェクトの Postgres を誤って掴まないよう、compose の db サービスに絞る。
+db_container="${DB_CONTAINER:-$(docker ps --filter label=com.docker.compose.service=db --filter publish=5432 --format '{{.Names}}' | head -n 1)}"
 if [ -z "$db_container" ]; then
 	echo "ローカル Postgres のコンテナが見つかりません（docker compose up -d で起動してください）" >&2
 	exit 1

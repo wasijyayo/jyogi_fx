@@ -3,6 +3,7 @@
 #
 #   scripts/finish-issue.sh <issue番号>
 #
+# メインの checkout で実行する（削除する worktree の中からは実行しない）。
 # worktree を削除してから専用 DB を削除する。ブランチは削除しない（マージ後も残す運用）。
 # worktree に未コミットの変更があると git worktree remove が失敗し、DB も残したまま止まる。
 
@@ -14,6 +15,8 @@ if [ -d "$worktree" ]; then
 else
 	echo "    見つからないのでスキップ"
 fi
+# ディレクトリを手で消した場合に残る worktree の登録を掃除する（残っていると次の start-issue.sh が失敗する）。
+git worktree prune
 
 echo "==> DB: $db_name"
 psql_admin "DROP DATABASE IF EXISTS $db_name WITH (FORCE)" >/dev/null

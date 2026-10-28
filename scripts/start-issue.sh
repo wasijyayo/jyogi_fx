@@ -16,6 +16,12 @@
 echo "==> worktree: $worktree ($branch)"
 git fetch -q origin
 if [ -d "$worktree" ]; then
+	# 途中で失敗した残骸や、別ブランチの worktree をそのまま使わないよう、ブランチを確かめる。
+	current=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+	if [ "$current" != "$branch" ]; then
+		echo "$worktree は既にありますが、$branch の worktree ではありません（現在: ${current:-不明}）" >&2
+		exit 1
+	fi
 	echo "    既にあるのでそのまま使う"
 elif git show-ref --verify --quiet "refs/heads/$branch"; then
 	git worktree add "$worktree" "$branch"

@@ -48,9 +48,13 @@ Issue ごとに worktree と**専用のローカル DB** を用意する。
 後始末で他のテストのデータを消したりするため。
 
 ```bash
+# メインの checkout で
 scripts/start-issue.sh 45      # worktree・専用 DB（fxgame_issue45）・コード生成をまとめて用意
-cd ../jyogi_fx-issue45/backend
+
+# 作成された worktree の backend で
 ../scripts/with-issue-db.sh go test ./...   # 専用 DB に向けてテスト
+
+# 作業が終わったら、メインの checkout に戻って
 scripts/finish-issue.sh 45     # worktree と専用 DB を削除（ブランチは残す）
 ```
 
@@ -60,6 +64,8 @@ scripts/finish-issue.sh 45     # worktree と専用 DB を削除（ブランチ�
   `.env` はコピーしないので、worktree の中で `DATABASE_URL` が本番を指すことはない
 - テストは `DATABASE_URL` が未設定だと共有の `fxgame` DB を使う。並列で作業するときは
   必ず `scripts/with-issue-db.sh` 経由で実行する（`.issue-db` が無ければ失敗して止まる）
+- コード生成は `make gen` と同じコマンドを直接実行している（Git Bash に `make` が無いため）。
+  `make gen` を変えたら `start-issue.sh` も合わせること
 - どのスクリプトも何度実行しても壊れない。`finish-issue.sh` は worktree に未コミットの変更があると
   `git worktree remove` が失敗し、DB も残したまま止まる
 - ローカル Postgres（`docker compose up -d`）が起動している必要がある。Git Bash（Windows）で動作確認済み
