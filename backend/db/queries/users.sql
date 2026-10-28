@@ -11,6 +11,16 @@ VALUES ($1, $2)
 ON CONFLICT (discord_id) DO UPDATE SET display_name = EXCLUDED.display_name
 RETURNING discord_id, display_name, created_at;
 
+-- name: InsertUserIfNotExists :exec
+-- Discord Interaction の受信時に、Webに一度もログインしていないユーザーの行を
+-- 作成する（#86）。初期資金は UpsertUser と同じく users.balance の DEFAULT 列で
+-- 付与される。既存ユーザーには何もしない（DO NOTHING）ため、Web登録済み・
+-- 2回目以降のInteractionでも初期資金が二重に付与されることはない。
+-- display_name の更新はWebログイン時（UpsertUser）に任せる。
+INSERT INTO users (discord_id, display_name)
+VALUES ($1, $2)
+ON CONFLICT (discord_id) DO NOTHING;
+
 -- name: GetUserForUpdate :one
 -- 取引処理などで残高を読み書きする前に行ロックを取る（同時注文による残高更新の
 -- lost update を防ぐ。#36 TRADE-1）。呼び出し側は必ずトランザクション内で使うこと。

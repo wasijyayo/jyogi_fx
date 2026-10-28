@@ -94,11 +94,9 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 
 	q := db.New(tx)
 
-	if _, err := q.UpsertUser(ctx, db.UpsertUserParams{
-		DiscordID:   du.ID,
-		DisplayName: du.Username,
-	}); err != nil {
-		return Session{}, fmt.Errorf("upsert user: %w", err)
+	// Webログイン時は既存ユーザーの display_name を Discord の最新のユーザー名に更新する。
+	if err := registerUser(ctx, q, du.ID, du.Username, true); err != nil {
+		return Session{}, err
 	}
 
 	if err := q.CreateSession(ctx, db.CreateSessionParams{
@@ -114,6 +112,41 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 	}
 
 	return Session{ID: sessionID, UserID: du.ID, ExpiresAt: expiresAt}, nil
+}
+
+// EnsureDiscordUser は Discord Interaction の送信者の users 行が無ければ作成する（#86）。
+// これまで users 行は Web の OAuth ログイン（HandleCallback）でしか作られず、Webに
+// 一度もログインしていないユーザーは Discord からプレイできなかった。主キーは
+// Discord ユーザーIDなので（design.md §6.1）、Interaction のペイロードに入っている
+// IDでそのまま作れば後でWebログインしても同じユーザーに繋がる。
+// 既存ユーザーには何もしないため何度呼んでも初期資金の二重付与にならない。
+func (s *AuthService) EnsureDiscordUser(ctx context.Context, discordID, displayName string) error {
+	// display_name の更新は Web ログイン時（HandleCallback）に任せる。
+	return registerUser(ctx, db.New(s.pool), discordID, displayName, false)
+}
+
+// registerUser は users 行が無ければ作成する。Web ログイン（HandleCallback）と
+// Discord Interaction（EnsureDiscordUser）のどちらの入口からもここを通す（CLAUDE.md §4）。
+// 初期資金（design.md §7.0）は users.balance の DEFAULT 列で付与される。
+// 既存ユーザーの場合、updateDisplayName が true なら display_name だけ更新し、
+// false なら何もしない。
+func registerUser(ctx context.Context, q *db.Queries, discordID, displayName string, updateDisplayName bool) error {
+	if updateDisplayName {
+		if _, err := q.UpsertUser(ctx, db.UpsertUserParams{
+			DiscordID:   discordID,
+			DisplayName: displayName,
+		}); err != nil {
+			return fmt.Errorf("upsert user: %w", err)
+		}
+		return nil
+	}
+	if err := q.InsertUserIfNotExists(ctx, db.InsertUserIfNotExistsParams{
+		DiscordID:   discordID,
+		DisplayName: displayName,
+	}); err != nil {
+		return fmt.Errorf("insert user if not exists: %w", err)
+	}
+	return nil
 }
 
 // CurrentUser は Cookie に入っているセッションIDからユーザーを引く。

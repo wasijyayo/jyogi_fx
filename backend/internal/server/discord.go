@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,11 @@ const maxInteractionBody = 256 << 10 // 256KiB
 // これを超えて古い（または未来の）リクエストはリプレイとみなして拒否する。
 const interactionMaxSkew = 5 * time.Minute
 
+// ensureUserTimeout は Interaction 送信者の自動登録（#86）にかける時間の上限。
+// Discord は3秒以内の応答を要求するため（design.md §6.2）、登録が詰まっても
+// 後段のコマンド処理と応答の時間を残せるよう短めに切る。
+const ensureUserTimeout = 1 * time.Second
+
 type interactionRequest struct {
 	Type interactionType         `json:"type"`
 	Data *interactionCommandData `json:"data,omitempty"`
@@ -74,6 +80,9 @@ type interactionMember struct {
 
 type interactionUser struct {
 	ID string `json:"id"`
+	// Username は Interaction 送信者の users 行を自動作成する際の display_name に使う
+	// （#86。WebログインのOAuth側も Discord の username を使っているのに揃える）。
+	Username string `json:"username,omitempty"`
 }
 
 // interactionCommandData はスラッシュコマンド・ボタン・モーダル送信のいずれでも
@@ -209,6 +218,51 @@ func interactionUserID(req interactionRequest) (string, bool) {
 	return "", false
 }
 
+// interactionUsername は呼び出しユーザーのDiscordユーザー名を解決する
+// （interactionUserID と同じく member.user → user の順に見る）。
+func interactionUsername(req interactionRequest) string {
+	if req.Member != nil && req.Member.User != nil && req.Member.User.Username != "" {
+		return req.Member.User.Username
+	}
+	if req.User != nil {
+		return req.User.Username
+	}
+	return ""
+}
+
+// ensureInteractionUser は Interaction 送信者の users 行が無ければ作成する（#86）。
+// Webに一度もログインしていないユーザーでも、/balance・/claim・ティッカーの取引ボタン
+// などからそのままプレイを始められるようにするため、コマンドを振り分ける前に呼ぶ。
+// 失敗してもInteraction自体は続行する（後段のコマンドがErrUserNotFoundとして扱う）。
+// ただし ensureUserTimeout を超えた場合は DB が詰まっているとみなし、後段の処理で
+// Discord の3秒制限を超えないよう context.DeadlineExceeded を返す。
+func ensureInteractionUser(ctx context.Context, cfg Config, req interactionRequest) error {
+	if cfg.Auth == nil {
+		return nil
+	}
+	userID, ok := interactionUserID(req)
+	if !ok {
+		return nil
+	}
+	displayName := interactionUsername(req)
+	if displayName == "" {
+		// display_name は NOT NULL。通常Discordは必ず username を送ってくるが、
+		// 欠けていても登録自体は止めない。
+		displayName = userID
+	}
+	ctx, cancel := context.WithTimeout(ctx, ensureUserTimeout)
+	defer cancel()
+	if err := cfg.Auth.EnsureDiscordUser(ctx, userID, displayName); err != nil {
+		log.Printf("discord interaction: ensure user %s: %v", userID, err)
+		// pgx がタイムアウトを DeadlineExceeded でラップしない経路もあるため、
+		// エラーの中身ではなく ctx 自体が期限切れかどうかで判定する。
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 func registerDiscordRoutes(mux *http.ServeMux, cfg Config) {
 	mux.HandleFunc("POST /interactions", handleInteractions(cfg))
 	// POST 以外は 405 を返す。これを登録しないと GET が SPA のキャッチオール（"/"）に
@@ -275,6 +329,20 @@ func handleInteractions(cfg Config) http.HandlerFunc {
 		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
+		}
+
+		// PING（Discordの疎通確認）にはユーザーが居ないので、それ以外のときだけ登録する。
+		if req.Type != interactionPing {
+			if err := ensureInteractionUser(r.Context(), cfg, req); err != nil {
+				writeJSON(w, http.StatusOK, interactionResponse{
+					Type: callbackChannelMessage,
+					Data: &interactionResponseData{
+						Content: "サーバーが混み合っています。時間をおいてもう一度お試しください。",
+						Flags:   messageFlagEphemeral,
+					},
+				})
+				return
+			}
 		}
 
 		switch req.Type {
