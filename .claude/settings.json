@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(opencode run *)",
+      "Bash(git worktree *)",
+      "Bash(git fetch)",
+      "Bash(git fetch *)",
+      "Bash(git push *)",
+      "Bash(scripts/start-issue.sh *)",
+      "Bash(scripts/finish-issue.sh *)",
+      "Bash(scripts/with-issue-db.sh *)",
+      "Bash(../scripts/with-issue-db.sh *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue comment *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh pr review *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *+*)",
+      "Bash(git push * main)",
+      "Bash(git push * main:*)",
+      "Bash(git push *:main)",
+      "Bash(git push * --delete *)",
+      "Bash(git push * -d *)",
+      "Bash(gh pr merge * --squash*)",
+      "Bash(gh pr merge * --rebase*)",
+      "Bash(gh pr merge * --delete-branch*)",
+      "Bash(gh pr merge * --admin*)"
+    ]
+  }
+}
