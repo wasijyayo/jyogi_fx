@@ -2,22 +2,25 @@
   "name": "fxgame-frontend",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "gen": "orval"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.59.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@tanstack/react-query": "^5.105.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.11",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.2",
-    "orval": "^7.13.2",
-    "typescript": "^5.6.2",
-    "vite": "^5.4.8"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "orval": "^8.45.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
   }
 }

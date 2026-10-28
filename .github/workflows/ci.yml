@@ -46,9 +46,10 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      # Node のバージョンは frontend/.nvmrc に一本化している（Dockerfile・ローカルと揃える。#87）。
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version-file: frontend/.nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
