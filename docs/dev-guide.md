@@ -116,6 +116,13 @@ Docker は「ローカル用 Postgres」と「本番用イメージのビルド�
 
 `make` が未インストールの環境（Git Bash 等）では中身のコマンドを直接叩く。
 
+### Node.js のバージョン
+
+フロントエンドのビルドには **Node.js 24（LTS "Krypton"）** を使う。バージョンは
+`frontend/.nvmrc` に固定しており、`package.json` の `engines.node`・`Dockerfile`
+（`node:24-alpine`）・CI（`setup-node` の `node-version-file`）もこれに揃えている。
+Node のメジャーを上げるときは、この 4 箇所をまとめて更新すること（#87）。
+
 ### スラッシュコマンドの登録（#29）
 
 コードを書いてデプロイするだけでは Discord のチャット欄に `/` コマンドは表示されない。

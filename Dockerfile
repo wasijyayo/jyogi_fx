@@ -2,7 +2,7 @@
 # そのため Node でSPAをビルド → その成果物を Go のビルドステージへ渡す、という2段構えにする。
 
 # --- frontend build stage ---
-FROM node:22-alpine AS frontend
+FROM node:24-alpine AS frontend
 WORKDIR /src/frontend
 # 依存定義だけを先に COPY することで、ソース変更のたびに npm ci が走るのを防ぐ（レイヤーキャッシュ）。
 COPY frontend/package.json frontend/package-lock.json ./
