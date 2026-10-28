@@ -33,5 +33,5 @@ fi
 
 # 管理用の接続（postgres DB）で SQL を 1 文実行し、結果を値だけで返す。
 psql_admin() {
-	docker exec -i "$db_container" psql -U app -d postgres -v ON_ERROR_STOP=1 -tAc "$1"
+	docker exec -i -e PGOPTIONS="-c client_min_messages=warning" "$db_container" psql -U app -d postgres -v ON_ERROR_STOP=1 -tAc "$1"
 }

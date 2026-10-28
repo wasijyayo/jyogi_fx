@@ -40,6 +40,30 @@ GitHub Issue に対応する作業は **`main` に直接コミットせず、必
 
 参考: PR #21（`wasijyayo/issue8`, issue #8 / WS-4）が実例。
 
+### Issue ごとの作業環境を用意する（#93）
+
+複数の Issue を並列で進めるとき（AI エージェントに任せる場合を含む）は、
+Issue ごとに worktree と**専用のローカル DB** を用意する。
+統合テストが共有の `fxgame` DB を使うと、並列実行時にデータを取り合ったり、
+後始末で他のテストのデータを消したりするため。
+
+```bash
+scripts/start-issue.sh 45      # worktree・専用 DB（fxgame_issue45）・コード生成をまとめて用意
+cd ../jyogi_fx-issue45/backend
+../scripts/with-issue-db.sh go test ./...   # 専用 DB に向けてテスト
+scripts/finish-issue.sh 45     # worktree と専用 DB を削除（ブランチは残す）
+```
+
+- worktree はメインの checkout と同じ階層に `<リポジトリ名>-issue<番号>` で作る
+  （`WORKTREE_ROOT` で変更可）。ブランチは `<git の user.name>/issue<番号>`（`BRANCH_PREFIX` で変更可）
+- 専用 DB の接続先は worktree 直下の `.issue-db`（gitignore 済み）に書かれる。
+  `.env` はコピーしないので、worktree の中で `DATABASE_URL` が本番を指すことはない
+- テストは `DATABASE_URL` が未設定だと共有の `fxgame` DB を使う。並列で作業するときは
+  必ず `scripts/with-issue-db.sh` 経由で実行する（`.issue-db` が無ければ失敗して止まる）
+- どのスクリプトも何度実行しても壊れない。`finish-issue.sh` は worktree に未コミットの変更があると
+  `git worktree remove` が失敗し、DB も残したまま止まる
+- ローカル Postgres（`docker compose up -d`）が起動している必要がある。Git Bash（Windows）で動作確認済み
+
 ### 縦切りで進める
 
 レイヤーごと（全 API → 全画面）ではなく、**機能ごとに端から端まで**通す。
