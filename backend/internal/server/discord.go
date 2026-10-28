@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -74,6 +75,9 @@ type interactionMember struct {
 
 type interactionUser struct {
 	ID string `json:"id"`
+	// Username は Interaction 送信者の users 行を自動作成する際の display_name に使う
+	// （#86。WebログインのOAuth側も Discord の username を使っているのに揃える）。
+	Username string `json:"username,omitempty"`
 }
 
 // interactionCommandData はスラッシュコマンド・ボタン・モーダル送信のいずれでも
@@ -209,6 +213,41 @@ func interactionUserID(req interactionRequest) (string, bool) {
 	return "", false
 }
 
+// interactionUsername は呼び出しユーザーのDiscordユーザー名を解決する
+// （interactionUserID と同じく member.user → user の順に見る）。
+func interactionUsername(req interactionRequest) string {
+	if req.Member != nil && req.Member.User != nil && req.Member.User.Username != "" {
+		return req.Member.User.Username
+	}
+	if req.User != nil {
+		return req.User.Username
+	}
+	return ""
+}
+
+// ensureInteractionUser は Interaction 送信者の users 行が無ければ作成する（#86）。
+// Webに一度もログインしていないユーザーでも、/balance・/claim・ティッカーの取引ボタン
+// などからそのままプレイを始められるようにするため、コマンドを振り分ける前に呼ぶ。
+// 失敗してもInteraction自体は続行する（後段のコマンドがErrUserNotFoundとして扱う）。
+func ensureInteractionUser(ctx context.Context, cfg Config, req interactionRequest) {
+	if cfg.Auth == nil {
+		return
+	}
+	userID, ok := interactionUserID(req)
+	if !ok {
+		return
+	}
+	displayName := interactionUsername(req)
+	if displayName == "" {
+		// display_name は NOT NULL。通常Discordは必ず username を送ってくるが、
+		// 欠けていても登録自体は止めない。
+		displayName = userID
+	}
+	if err := cfg.Auth.EnsureDiscordUser(ctx, userID, displayName); err != nil {
+		log.Printf("discord interaction: ensure user %s: %v", userID, err)
+	}
+}
+
 func registerDiscordRoutes(mux *http.ServeMux, cfg Config) {
 	mux.HandleFunc("POST /interactions", handleInteractions(cfg))
 	// POST 以外は 405 を返す。これを登録しないと GET が SPA のキャッチオール（"/"）に
@@ -275,6 +314,11 @@ func handleInteractions(cfg Config) http.HandlerFunc {
 		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
+		}
+
+		// PING（Discordの疎通確認）にはユーザーが居ないので、それ以外のときだけ登録する。
+		if req.Type != interactionPing {
+			ensureInteractionUser(r.Context(), cfg, req)
 		}
 
 		switch req.Type {

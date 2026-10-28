@@ -740,6 +740,11 @@ Discord:  スラッシュコマンドのペイロードに Discord ユーザーI
   コールバック時に対象ギルド所属を確認
 - Redirect URI に本番 URL とローカル（`http://localhost:8080/...`）の両方を登録
 - 初回ログイン時に users 行を作成し初期資金を付与
+- **Discord 側でも、Interaction（コマンド・ボタン・モーダル）の初回受信時に users 行を
+  自動作成し初期資金を付与する（#86）。** Web に一度もログインしていないユーザーでも
+  Discord からそのままプレイを始められる。`INSERT ... ON CONFLICT DO NOTHING` で冪等に
+  するため、Web 登録との二重付与は起きない（初期資金は Web・Discord とも
+  `users.balance` の DEFAULT 列で付与される）。display_name の更新は Web ログイン時のみ
 
 将来的な拡張: `/login` コマンドでワンタイムトークン付き URL を ephemeral
 （本人だけに見えるメッセージ）で返すと OAuth を踏まずにログインできる。MVP では不要。

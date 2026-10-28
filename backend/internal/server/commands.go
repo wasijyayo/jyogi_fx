@@ -95,7 +95,7 @@ func handleBalanceCommand(ctx context.Context, cfg Config, req interactionReques
 	b, err := cfg.Profile.Balance(ctx, userID)
 	if err != nil {
 		if errors.Is(err, game.ErrUserNotFound) {
-			return errorCommandResponse("ユーザー登録がまだのようです。先にWebでログインしてください。")
+			return errorCommandResponse("ユーザー登録に失敗しました。時間をおいてもう一度お試しください。")
 		}
 		log.Printf("balance command: %v", err)
 		return errorCommandResponse("エラーが発生しました。")
@@ -377,7 +377,7 @@ func handleClaimCommand(ctx context.Context, cfg Config, req interactionRequest,
 		case errors.Is(err, game.ErrAlreadyClaimed):
 			return errorCommandResponse("本日分はすでに受け取り済みです。")
 		case errors.Is(err, game.ErrUserNotFound):
-			return errorCommandResponse("ユーザー登録がまだのようです。先にWebでログインしてください。")
+			return errorCommandResponse("ユーザー登録に失敗しました。時間をおいてもう一度お試しください。")
 		default:
 			log.Printf("claim command: %v", err)
 			return errorCommandResponse("エラーが発生しました。")
@@ -467,8 +467,8 @@ func handleOrderButton(ctx context.Context, cfg Config, req interactionRequest, 
 		if balance, err := cfg.Profile.Balance(ctx, userID); err == nil {
 			info = append(info, fmt.Sprintf("残高%s", formatAmount(balance.Balance)))
 		} else if !errors.Is(err, game.ErrUserNotFound) {
-			// 未登録ユーザー（ErrUserNotFound）は「先にWebでログイン」を促す他コマンドと
-			// 同じ状況で、モーダル自体は開いて構わない（発注時に改めてエラーになる）ため
+			// 未登録ユーザー（ErrUserNotFound。#86以降はユーザー自動登録の失敗時のみ）は
+			// モーダル自体は開いて構わない（発注時に改めてエラーになる）ため
 			// ログしない。それ以外の予期しない失敗のみログする。
 			log.Printf("order button: balance for title: %v", err)
 		}
@@ -614,7 +614,7 @@ func handleModalSubmit(ctx context.Context, cfg Config, req interactionRequest, 
 		case errors.Is(err, game.ErrCurrencyNotFound):
 			return errorCommandResponse("その通貨は見つかりません。")
 		case errors.Is(err, game.ErrUserNotFound):
-			return errorCommandResponse("ユーザー登録がまだのようです。先にWebでログインしてください。")
+			return errorCommandResponse("ユーザー登録に失敗しました。時間をおいてもう一度お試しください。")
 		default:
 			log.Printf("place order: %v", err)
 			return errorCommandResponse("エラーが発生しました。")

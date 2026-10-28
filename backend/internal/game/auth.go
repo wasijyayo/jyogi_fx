@@ -116,6 +116,23 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 	return Session{ID: sessionID, UserID: du.ID, ExpiresAt: expiresAt}, nil
 }
 
+// EnsureDiscordUser は Discord Interaction の送信者の users 行が無ければ作成する（#86）。
+// これまで users 行は Web の OAuth ログイン（HandleCallback）でしか作られず、Webに
+// 一度もログインしていないユーザーは Discord からプレイできなかった。主キーは
+// Discord ユーザーIDなので（design.md §6.1）、Interaction のペイロードに入っている
+// IDでそのまま作れば後でWebログインしても同じユーザーに繋がる。
+// 初期資金（design.md §7.0）は HandleCallback と同じく users.balance の DEFAULT 列で
+// 付与され、既存ユーザーには何もしないため何度呼んでも二重付与にならない。
+func (s *AuthService) EnsureDiscordUser(ctx context.Context, discordID, displayName string) error {
+	if err := db.New(s.pool).InsertUserIfNotExists(ctx, db.InsertUserIfNotExistsParams{
+		DiscordID:   discordID,
+		DisplayName: displayName,
+	}); err != nil {
+		return fmt.Errorf("insert user if not exists: %w", err)
+	}
+	return nil
+}
+
 // CurrentUser は Cookie に入っているセッションIDからユーザーを引く。
 // GET /api/me など、ログイン必須のエンドポイントから呼ばれる。
 func (s *AuthService) CurrentUser(ctx context.Context, sessionID string) (User, error) {
