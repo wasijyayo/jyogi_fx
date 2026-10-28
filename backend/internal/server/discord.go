@@ -57,6 +57,11 @@ const maxInteractionBody = 256 << 10 // 256KiB
 // これを超えて古い（または未来の）リクエストはリプレイとみなして拒否する。
 const interactionMaxSkew = 5 * time.Minute
 
+// ensureUserTimeout は Interaction 送信者の自動登録（#86）にかける時間の上限。
+// Discord は3秒以内の応答を要求するため（design.md §6.2）、登録が詰まっても
+// 後段のコマンド処理と応答の時間を残せるよう短めに切る。
+const ensureUserTimeout = 1 * time.Second
+
 type interactionRequest struct {
 	Type interactionType         `json:"type"`
 	Data *interactionCommandData `json:"data,omitempty"`
@@ -229,13 +234,15 @@ func interactionUsername(req interactionRequest) string {
 // Webに一度もログインしていないユーザーでも、/balance・/claim・ティッカーの取引ボタン
 // などからそのままプレイを始められるようにするため、コマンドを振り分ける前に呼ぶ。
 // 失敗してもInteraction自体は続行する（後段のコマンドがErrUserNotFoundとして扱う）。
-func ensureInteractionUser(ctx context.Context, cfg Config, req interactionRequest) {
+// ただし ensureUserTimeout を超えた場合は DB が詰まっているとみなし、後段の処理で
+// Discord の3秒制限を超えないよう context.DeadlineExceeded を返す。
+func ensureInteractionUser(ctx context.Context, cfg Config, req interactionRequest) error {
 	if cfg.Auth == nil {
-		return
+		return nil
 	}
 	userID, ok := interactionUserID(req)
 	if !ok {
-		return
+		return nil
 	}
 	displayName := interactionUsername(req)
 	if displayName == "" {
@@ -243,9 +250,17 @@ func ensureInteractionUser(ctx context.Context, cfg Config, req interactionReque
 		// 欠けていても登録自体は止めない。
 		displayName = userID
 	}
+	ctx, cancel := context.WithTimeout(ctx, ensureUserTimeout)
+	defer cancel()
 	if err := cfg.Auth.EnsureDiscordUser(ctx, userID, displayName); err != nil {
 		log.Printf("discord interaction: ensure user %s: %v", userID, err)
+		// pgx がタイムアウトを DeadlineExceeded でラップしない経路もあるため、
+		// エラーの中身ではなく ctx 自体が期限切れかどうかで判定する。
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
+	return nil
 }
 
 func registerDiscordRoutes(mux *http.ServeMux, cfg Config) {
@@ -318,7 +333,16 @@ func handleInteractions(cfg Config) http.HandlerFunc {
 
 		// PING（Discordの疎通確認）にはユーザーが居ないので、それ以外のときだけ登録する。
 		if req.Type != interactionPing {
-			ensureInteractionUser(r.Context(), cfg, req)
+			if err := ensureInteractionUser(r.Context(), cfg, req); err != nil {
+				writeJSON(w, http.StatusOK, interactionResponse{
+					Type: callbackChannelMessage,
+					Data: &interactionResponseData{
+						Content: "サーバーが混み合っています。時間をおいてもう一度お試しください。",
+						Flags:   messageFlagEphemeral,
+					},
+				})
+				return
+			}
 		}
 
 		switch req.Type {
