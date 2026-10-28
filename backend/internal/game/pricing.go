@@ -102,8 +102,8 @@ func BasePrice(c db.Currency, tickIndex int64, events []db.Event) decimal.Decima
 
 	epochOffset := minuteOfDayJST(c.EpochAt.Time)
 	seed := uint64(c.Seed)
-	volatility := c.Volatility.InexactFloat64()
-	offSessionScale := c.OffSessionScale.InexactFloat64()
+	volatility := c.Volatility.InexactFloat64() //nolint:forbidigo // 内部の総和・exp 計算用（上のコメント参照）
+	offSessionScale := c.OffSessionScale.InexactFloat64() //nolint:forbidigo // 内部の総和・exp 計算用（上のコメント参照）
 
 	sum := 0.0
 	for i := int64(1); i <= tickIndex; i++ {

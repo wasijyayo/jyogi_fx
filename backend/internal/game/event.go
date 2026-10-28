@@ -273,7 +273,7 @@ func volatilityMultiplierAt(events []db.Event, tick int64) float64 {
 			continue
 		}
 		if tick >= e.FireTick && tick < e.FireTick+int64(e.DurationTicks) {
-			return e.Magnitude.InexactFloat64()
+			return e.Magnitude.InexactFloat64() //nolint:forbidigo // BasePrice のホットループ用の倍率（上のコメント参照）
 		}
 	}
 	return 1

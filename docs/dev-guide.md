@@ -281,8 +281,24 @@ PR・`main`へのpushで以下を回す（`make`が無い環境でも動くよ�
   `frontend/src/api/generated` は `.gitignore` 対象のため、現状はこのチェックが
   実質的に「生成コマンド自体がエラーなく完走するか」の確認になる）
 - マイグレーション適用
-- `go vet` / `golangci-lint`
+- `go vet` / `golangci-lint`（設定は `backend/.golangci.yml`。下記「lint で強制しているルール」参照）
 - `go test`（サービスコンテナのPostgresに接続するため、統合テストもスキップされず実際に走る）
+
+#### lint で強制しているルール（#91 AGENT-1）
+
+CLAUDE.md §5 の禁止事項のうち、機械的に判定できるものを `forbidigo` で CI 失敗にしている。
+
+| ルール | 禁止しているもの | 適用範囲 |
+|---|---|---|
+| §5.1 時刻の注入 | `time.Now` / `time.Since` / `time.Until` | `internal/game` 配下のみ |
+| §5.2 float 禁止 | `decimal.Decimal` の `Float64()` / `InexactFloat64()`、`strconv.ParseFloat` | `backend` 全体 |
+
+- テストファイル（`_test.go`）はどちらのルールも対象外（期待値の組み立てや経過時間の計測に使ってよい）
+- 設計上どうしても必要な箇所は、その行に `//nolint:forbidigo // 理由` を書いて個別に許可する。
+  現在の許可箇所は、`RealClock.Now()`（`clock.go`）と、価格モデル内部の exp/sqrt 計算
+  （`pricing.go`・`pressure.go`・`event.go`。`BasePrice` のコメント参照）のみ
+- `float64` という型そのものの使用は lint では検出していない（価格モデル内部の計算で正当に使うため）。
+  金額・価格・数量の型が decimal になっているかは、引き続きレビューで確認する
 
 マージのブロックは、GitHub側のブランチ保護ルールで`ci`ジョブを必須ステータス
 チェックに指定することで行う（リポジトリ設定 → Branches → `main`）。

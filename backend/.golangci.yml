@@ -1,0 +1,38 @@
+# golangci-lint v2 の設定（#91 AGENT-1）。
+# CLAUDE.md §5 の禁止事項のうち、機械的に判定できるものを CI で強制する。
+# 文章のルールは読み落とされうるため、違反したら PR が赤くなるようにする。
+version: "2"
+
+linters:
+  # default: standard（errcheck・govet・ineffassign・staticcheck・unused）はそのまま使う。
+  enable:
+    - forbidigo
+  settings:
+    forbidigo:
+      # パッケージの別名（import 時のリネーム）やメソッド呼び出しも、型情報で判定する。
+      analyze-types: true
+      forbid:
+        # CLAUDE.md §5.1: internal/game では時刻を Clock 経由で受ける。
+        # time.Since / time.Until も内部で time.Now() を呼ぶため同様に禁止する。
+        # 適用範囲は下の exclusions で internal/game に絞っている。
+        - pattern: ^time\.(Now|Since|Until)$
+          msg: "CLAUDE.md §5.1: internal/game では time.Now() を直接呼ばず、Clock か引数の時刻を使う"
+        # CLAUDE.md §5.2: 金額・価格・数量を float に変換しない。
+        # 価格モデル内部の exp/sqrt 計算など、設計上 float を使う箇所だけ
+        # `//nolint:forbidigo // 理由` で個別に許可する。
+        - pattern: ^decimal\.Decimal\.(Float64|InexactFloat64)$
+          msg: "CLAUDE.md §5.2: decimal を float に変換しない（設計上必要な箇所は //nolint:forbidigo に理由を書く）"
+        - pattern: ^strconv\.ParseFloat$
+          msg: "CLAUDE.md §5.2: 金額・倍率は decimal.NewFromString でパースする"
+  exclusions:
+    rules:
+      # テストは期待値の組み立てや経過時間の計測で time.Now / float を使ってよい。
+      - path: _test\.go
+        linters:
+          - forbidigo
+      # §5.1 の時刻ルールは internal/game だけに適用する
+      # （server 層の Cookie 期限や main.go の RealClock 生成などは対象外）。
+      - path-except: ^internal/game/
+        text: "CLAUDE.md §5.1"
+        linters:
+          - forbidigo
