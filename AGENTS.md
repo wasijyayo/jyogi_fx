@@ -14,7 +14,9 @@ AI エージェント（OpenCode など）向けの作業ルール。
 ## 秘密情報と本番環境
 
 - `.env` を読まない・`source` しない・コピーしない。`DATABASE_URL` は**本番 Neon** を指している
-- ローカル DB に接続するときは、`LOCAL_DATABASE_URL` を明示的に使う
+- DB を使うコマンド（テストなど）は `scripts/with-issue-db.sh` 経由で実行する。
+  worktree 専用のローカル DB（`scripts/start-issue.sh` が用意した `.issue-db`）に向けるため。
+  素の `go test` は共有の `fxgame` DB を使い、並列で作業している他の worktree と衝突する
 - 本番環境（Neon・Cloud Run・Discord）に対する操作はしない
 
 ## Git と PR
@@ -22,7 +24,7 @@ AI エージェント（OpenCode など）向けの作業ルール。
 - main へ直接 push しない。force push しない。PR をマージしない（マージは人間が判断する）
 - ブランチ名・コミットメッセージ・PR 本文の書き方は、作業を依頼した側の指示に従う
 - PR を出す前に、次がすべて通ることを自分で確認する（`make` が無い環境では中身のコマンドを直接実行する）
-  - `cd backend && go build ./... && go vet ./... && golangci-lint run ./... && go test ./...`
+  - `cd backend && go build ./... && go vet ./... && golangci-lint run ./... && ../scripts/with-issue-db.sh go test ./...`
   - フロントエンドを触った場合: `cd frontend && npm run gen && npm run build`
 - マイグレーションを追加した場合は、PR 本文に必ず明記する（本番への適用は人間が手動で行う）
 
