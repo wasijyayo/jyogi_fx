@@ -33,3 +33,6 @@ frontend/src/api/generated/
 .DS_Store
 .vscode/
 .idea/
+
+# scripts/start-issue.sh が worktree ごとに書く専用 DB の接続先（#93）
+.issue-db
