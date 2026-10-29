@@ -49,6 +49,21 @@ const backendDir = join(repoRoot, 'backend');
 // Windows では go build が .exe を付ける（spawn は .exe 付きの実ファイルを要求する）。
 const bin = join(repoRoot, 'bin', `app-e2e${process.platform === 'win32' ? '.exe' : ''}`);
 
+// Go のバイナリは SPA（backend/web）を embed するので、先に今のフロントエンドを
+// ビルドしておく。これを省くと、古い画面か空の画面を配信してしまう。
+const frontendDir = join(repoRoot, 'frontend');
+for (const script of ['gen', 'build']) {
+  const r = spawnSync('npm', ['run', script], {
+    cwd: frontendDir,
+    env,
+    stdio: 'inherit',
+    shell: process.platform === 'win32', // Windows の npm は npm.cmd なのでシェル経由で呼ぶ
+  });
+  if (r.status !== 0) {
+    process.exit(r.status ?? 1);
+  }
+}
+
 const build = spawnSync('go', ['build', '-o', bin, './cmd/app'], {
   cwd: backendDir,
   env,

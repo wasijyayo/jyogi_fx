@@ -8,13 +8,15 @@ import { cleanupTestSession, createTestSession } from './support/db';
 // Cookie を設定する方式（本番コードにテスト用ログインの抜け道は作らない）。
 const discordId = `e2e-${Date.now()}`;
 const sessionId = `e2e-session-${Date.now()}`;
+// 使い捨ての通貨（seed の通貨の需給圧力を書き換えないため）。
+const symbol = `E2E${Date.now() % 1_000_000}`;
 
 test.beforeAll(async () => {
-  await createTestSession(discordId, sessionId);
+  await createTestSession(discordId, sessionId, symbol);
 });
 
 test.afterAll(async () => {
-  await cleanupTestSession(discordId, sessionId);
+  await cleanupTestSession(discordId, sessionId, symbol);
 });
 
 test('ログイン → 注文 → 決済', async ({ context, page }) => {
@@ -24,8 +26,8 @@ test('ログイン → 注文 → 決済', async ({ context, page }) => {
   ]);
 
   // チャートを見ながら注文する（通貨ページに注文フォームがある）。
-  await page.goto('/currencies/JOG');
-  await expect(page.getByRole('heading', { name: '新規注文（JOG）' })).toBeVisible();
+  await page.goto(`/currencies/${symbol}`);
+  await expect(page.getByRole('heading', { name: `新規注文（${symbol}）` })).toBeVisible();
   await page.getByLabel('数量').fill('10');
   await page.getByLabel('レバレッジ').fill('2');
   await page.getByRole('button', { name: '買い注文' }).click();
@@ -34,7 +36,7 @@ test('ログイン → 注文 → 決済', async ({ context, page }) => {
   // 取引ページの建玉一覧に反映されている。
   await page.goto('/trade');
   await expect(page.getByRole('heading', { name: '建玉一覧' })).toBeVisible();
-  const row = page.locator('li', { hasText: 'JOG' }).first();
+  const row = page.locator('li', { hasText: symbol }).first();
   await expect(row).toContainText('含み損益');
   await expect(row).toContainText('買い');
 

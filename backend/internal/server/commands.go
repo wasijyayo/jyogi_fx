@@ -631,6 +631,10 @@ func handleModalSubmit(ctx context.Context, cfg Config, req interactionRequest, 
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, game.ErrInvalidSize):
+			return errorCommandResponse("数量は 0 より大きく 1 兆未満の数で入力してください。")
+		case errors.Is(err, game.ErrInvalidLeverage):
+			return errorCommandResponse("レバレッジは 0 より大きく 1 兆未満の数で入力してください。")
 		case errors.Is(err, game.ErrInsufficientBalance):
 			return errorCommandResponse("残高が不足しています。")
 		case errors.Is(err, game.ErrLeverageExceedsMax):

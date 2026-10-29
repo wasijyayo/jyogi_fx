@@ -133,9 +133,9 @@ func writeOrderError(w http.ResponseWriter, err error) {
 	case errors.Is(err, game.ErrInvalidSide):
 		writeAPIError(w, http.StatusBadRequest, "売買方向は long または short を指定してください")
 	case errors.Is(err, game.ErrInvalidSize):
-		writeAPIError(w, http.StatusBadRequest, "数量は正の数で入力してください")
+		writeAPIError(w, http.StatusBadRequest, "数量は 0 より大きく 1 兆未満の数で入力してください")
 	case errors.Is(err, game.ErrInvalidLeverage):
-		writeAPIError(w, http.StatusBadRequest, "レバレッジは正の数で入力してください")
+		writeAPIError(w, http.StatusBadRequest, "レバレッジは 0 より大きく 1 兆未満の数で入力してください")
 	case errors.Is(err, game.ErrCurrencyNotFound):
 		writeAPIError(w, http.StatusNotFound, "その通貨は見つかりません")
 	case errors.Is(err, game.ErrUserNotFound):

@@ -56,10 +56,10 @@ const (
 var (
 	// ErrInvalidSide は Side が long/short のどちらでもない場合に返る。
 	ErrInvalidSide = errors.New("side must be \"long\" or \"short\"")
-	// ErrInvalidSize は size が0以下の場合に返る。
-	ErrInvalidSize = errors.New("size must be positive")
-	// ErrInvalidLeverage は leverage が0以下の場合に返る。
-	ErrInvalidLeverage = errors.New("leverage must be positive")
+	// ErrInvalidSize は size が0以下、または扱える範囲（orderValueInRange）の外の場合に返る。
+	ErrInvalidSize = errors.New("size must be positive and within range")
+	// ErrInvalidLeverage は leverage が0以下、または扱える範囲（orderValueInRange）の外の場合に返る。
+	ErrInvalidLeverage = errors.New("leverage must be positive and within range")
 	// ErrLeverageExceedsMax は指定レバレッジが通貨の max_leverage を超える場合に返る
 	// （design.md §7.0「レバレッジ上限: 10倍」・§2.9 通貨別上書き）。
 	ErrLeverageExceedsMax = errors.New("leverage exceeds currency max_leverage")
@@ -153,14 +153,32 @@ func NewTradeService(pool *pgxpool.Pool, clock Clock, session *SessionService, n
 //
 // 必ず1トランザクションで囲む（dev-guide.md §3）。残高だけ減ってポジションが
 // 作られない、という状態を絶対に作らない。
+// orderValueMax は注文の数量・レバレッジの上限（この値未満）。列は NUMERIC(20,8) で、
+// 整数部は 12 桁まで入る。
+var orderValueMax = decimal.New(1, 12)
+
+// orderValueInRange は数量・レバレッジが扱える範囲かを返す（Web・Discord 共通の入口で使う）。
+//
+// decimal.NewFromString は "1e100000000" のような指数表記を受け付ける。そのまま計算に
+// 使うと、トランザクションで行をロックしたまま巨大な整数を作ったり、指数のオーバー
+// フローで panic したりしうる。そのため、比較や計算より先に指数（10 の何乗か）だけを
+// 安く確かめ、範囲内のものだけを上限と比べる。小数の桁は NUMERIC(20,8) で丸められる
+// ので、ここでは極端なもの（小数 18 桁超）だけを弾く。
+func orderValueInRange(d decimal.Decimal) bool {
+	if e := d.Exponent(); e < -18 || e > 12 {
+		return false
+	}
+	return d.Abs().LessThan(orderValueMax)
+}
+
 func (s *TradeService) PlaceOrder(ctx context.Context, now time.Time, p PlaceOrderParams) (PlaceOrderResult, error) {
 	if p.Side != SideLong && p.Side != SideShort {
 		return PlaceOrderResult{}, ErrInvalidSide
 	}
-	if !p.Size.IsPositive() {
+	if !p.Size.IsPositive() || !orderValueInRange(p.Size) {
 		return PlaceOrderResult{}, ErrInvalidSize
 	}
-	if !p.Leverage.IsPositive() {
+	if !p.Leverage.IsPositive() || !orderValueInRange(p.Leverage) {
 		return PlaceOrderResult{}, ErrInvalidLeverage
 	}
 	// セッション外・終了1分前は新規注文を拒否する（確定#14/#48。#34の判定を使う）。

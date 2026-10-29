@@ -28,12 +28,24 @@ function databaseUrl(): string {
   return url;
 }
 
-// createTestSession は E2E 用のユーザーとセッションを作る。残高は注文テストが
-// 価格変動（epoch_at からの BasePrice のランダムウォーク）に依存しないよう十分大きくする。
-export async function createTestSession(discordId: string, sessionId: string): Promise<void> {
+// createTestSession は E2E 用のユーザー・セッションと、使い捨ての通貨を作る。
+// 注文・決済は通貨の需給圧力（pressure）を書き換えるので、seed の通貨（JOG など）は使わない
+// （AGENTS.md）。通貨の epoch_at を now() にして、価格が base_price 付近から始まるようにする。
+// 残高は注文テストが価格変動に依存しないよう十分大きくする。
+export async function createTestSession(
+  discordId: string,
+  sessionId: string,
+  symbol: string,
+): Promise<void> {
   const client = new Client({ connectionString: databaseUrl() });
   await client.connect();
   try {
+    await client.query(
+      `INSERT INTO currencies (symbol, name, base_price, drift, volatility, lambda, k, liquidity,
+         pressure_at, off_session_scale, seed, max_leverage, fee_rate, epoch_at)
+       VALUES ($1, $2, 100, 0, 0.001, 0.1, 0.01, 100000, now(), 0.05, 999, 10, 0.0005, now())`,
+      [symbol, 'E2E テスト通貨'],
+    );
     await client.query(
       `INSERT INTO users (discord_id, display_name, balance)
        VALUES ($1, $2, 100000)
@@ -52,14 +64,23 @@ export async function createTestSession(discordId: string, sessionId: string): P
 }
 
 // cleanupTestSession は E2E が作ったデータを後始末する。子テーブルから順に消す
-// （AGENTS.md: trades → positions → sessions_auth → users）。
-export async function cleanupTestSession(discordId: string, sessionId: string): Promise<void> {
+// （AGENTS.md: trades → positions → price_ticks / events → sessions_auth → currencies → users）。
+// 削除に失敗したら例外にして、後始末の失敗に気づけるようにする。
+export async function cleanupTestSession(
+  discordId: string,
+  sessionId: string,
+  symbol: string,
+): Promise<void> {
   const client = new Client({ connectionString: databaseUrl() });
   await client.connect();
   try {
+    const currency = `(SELECT id FROM currencies WHERE symbol = $1)`;
     await client.query('DELETE FROM trades WHERE user_id = $1', [discordId]);
     await client.query('DELETE FROM positions WHERE user_id = $1', [discordId]);
+    await client.query(`DELETE FROM price_ticks WHERE currency_id = ${currency}`, [symbol]);
+    await client.query(`DELETE FROM events WHERE currency_id = ${currency}`, [symbol]);
     await client.query('DELETE FROM sessions_auth WHERE id = $1', [sessionId]);
+    await client.query('DELETE FROM currencies WHERE symbol = $1', [symbol]);
     await client.query('DELETE FROM users WHERE discord_id = $1', [discordId]);
   } finally {
     await client.end();
