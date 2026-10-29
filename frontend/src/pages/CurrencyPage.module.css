@@ -1,0 +1,30 @@
+.main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.loading {
+  padding: 16px;
+  color: #666;
+}
+
+.symbol {
+  font-size: 24px;
+  margin: 0;
+}
+
+.name {
+  color: #666;
+  margin: 4px 0 16px;
+}
+
+.price {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.change {
+  font-size: 14px;
+  color: #555;
+}

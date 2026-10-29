@@ -32,6 +32,59 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/currencies:
+    get:
+      operationId: listCurrencies
+      summary: 通貨一覧（現在価格と前日比）を取得する
+      tags: [market]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CurrencySummary"
+
+  /api/currencies/{symbol}:
+    get:
+      operationId: getCurrency
+      summary: 通貨1件の現在価格と前日比を取得する
+      tags: [market]
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrencySummary"
+        "404":
+          description: 該当する通貨が存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/market/status:
+    get:
+      operationId: getMarketStatus
+      summary: 取引時間の状態（開催中か／残り時間／次の開始時刻）を取得する
+      tags: [market]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketStatus"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -45,12 +98,61 @@ components:
       required:
         - discordId
         - displayName
+        - balance
       properties:
         discordId:
           type: string
           description: Discord ユーザーID。usersテーブルの主キー
         displayName:
           type: string
+        balance:
+          type: string
+          description: 残高（decimal文字列。CLAUDE.md §5.2 float禁止）
+
+    CurrencySummary:
+      type: object
+      required:
+        - symbol
+        - name
+        - currentPrice
+        - dayChangePercent
+      properties:
+        symbol:
+          type: string
+        name:
+          type: string
+        currentPrice:
+          type: string
+          description: 現在価格（decimal文字列。CLAUDE.md §5.2 float禁止）
+        dayChangePercent:
+          type: string
+          nullable: true
+          description: 前日比（%）。「今日より前の直近セッションの最終close」が基準。
+            小数2桁に丸めた文字列。基準が無ければ null
+
+    MarketStatus:
+      type: object
+      required:
+        - open
+        - alwaysOpen
+        - remainingMinutes
+        - nextStartAt
+      properties:
+        open:
+          type: boolean
+          description: 取引時間中（開催中）かどうか
+        alwaysOpen:
+          type: boolean
+          description: GAME_ALWAYS_OPEN（開発モード）が有効か
+        remainingMinutes:
+          type: integer
+          nullable: true
+          description: 開催中の残り時間（分）。時間外・常時開催なら null
+        nextStartAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 時間外の場合の次の開始時刻（RFC3339）。開催中・常時開催なら null
 
     Error:
       type: object

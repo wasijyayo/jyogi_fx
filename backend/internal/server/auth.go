@@ -15,6 +15,32 @@ const (
 func registerAuthRoutes(mux *http.ServeMux, cfg Config) {
 	mux.HandleFunc("GET /auth/discord/login", handleDiscordLogin(cfg))
 	mux.HandleFunc("GET /auth/discord/callback", handleDiscordCallback(cfg))
+	mux.HandleFunc("POST /auth/logout", handleLogout(cfg))
+	// POST 以外は 405 を返す。登録しないと GET が SPA のキャッチオール（"/"）に
+	// 落ちて index.html を 200 で返してしまう（tick.go の登録と同じ理由）。
+	mux.HandleFunc("/auth/logout", handleLogoutMethodNotAllowed)
+}
+
+func handleLogoutMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Allow", http.MethodPost)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleLogout は POST /auth/logout。sessions テーブルの該当行を削除し、
+// ログイン時と同じ属性（Path・HttpOnly・Secure・SameSite=Lax）で Cookie を失効させる
+// （CLAUDE.md §5.4）。セッションIDが無くても 204 を返す（冪等）。
+func handleLogout(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+			if err := cfg.Auth.Logout(r.Context(), cookie.Value); err != nil {
+				log.Printf("logout: %v", err)
+				http.Error(w, "logout failed", http.StatusInternalServerError)
+				return
+			}
+		}
+		clearCookie(w, sessionCookieName, cfg.SecureCookies)
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // handleDiscordLogin は「Discordでログイン」の入口。認可URLへリダイレクトする。

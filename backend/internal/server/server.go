@@ -19,6 +19,7 @@ type Config struct {
 	Quote   *game.QuoteService
 	Trade   *game.TradeService
 	Claim   *game.ClaimService
+	Session *game.SessionService
 
 	// SecureCookies が true のとき Cookie に Secure 属性を付ける。
 	// Cloud Run（本番）では true、ローカル開発（http://localhost）では false にする。
