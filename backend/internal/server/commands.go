@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -277,6 +278,21 @@ func handlePriceCommand(ctx context.Context, cfg Config, req interactionRequest,
 		description += "  " + quote.Sparkline
 	}
 
+	buttons := []discord.Button{
+		{Type: 2, Style: discord.ButtonStyleSuccess, Label: "買う", CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(game.SideLong), quote.Symbol)},
+		{Type: 2, Style: discord.ButtonStyleDanger, Label: "売る", CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(game.SideShort), quote.Symbol)},
+	}
+	// issue #100 WEB-5: PUBLIC_BASE_URL が設定されていれば、通貨ページへの
+	// リンクボタン（style 5）を追加する。未設定なら付けない（起動は失敗させない）。
+	if cfg.PublicBaseURL != "" {
+		buttons = append(buttons, discord.Button{
+			Type:  2,
+			Style: discord.ButtonStyleLink,
+			Label: "詳細チャートを見る",
+			URL:   currencyPageURL(cfg.PublicBaseURL, quote.Symbol),
+		})
+	}
+
 	return interactionResponseData{
 		Embeds: []discordEmbed{{
 			Title:       "💹 " + quote.Symbol,
@@ -284,13 +300,23 @@ func handlePriceCommand(ctx context.Context, cfg Config, req interactionRequest,
 			Color:       colorForChangePercent(quote.ChangePercent),
 		}},
 		Components: []discord.ActionRow{
-			discord.NewActionRow(
-				discord.Button{Type: 2, Style: discord.ButtonStyleSuccess, Label: "買う", CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(game.SideLong), quote.Symbol)},
-				discord.Button{Type: 2, Style: discord.ButtonStyleDanger, Label: "売る", CustomID: discord.EncodeCustomID(discord.CustomIDOrderButton, string(game.SideShort), quote.Symbol)},
-			),
+			discord.NewActionRow(buttons...),
 		},
 		Flags: messageFlagEphemeral,
 	}
+}
+
+// currencyPageURL は通貨ページ（/currencies/:symbol）への直リンク URL を組み立てる
+// （issue #100 WEB-5。design.md §6.5「Webへのリンク: Embedに『詳細チャートを見る』
+// ボタン。該当通貨ページへ直リンク」）。
+//
+// PUBLIC_BASE_URL（例: https://xxx.run.app）は末尾にスラッシュが付いていても
+// 付いていなくても同じ URL になるよう正規化する。symbol は通貨テーブルの値
+// （quote.Symbol）を使うため、通貨をハードコードしない（CLAUDE.md §5.3）。
+// ユーザー作成通貨（CLAUDE.md §5.3）の記号に URL で特別な意味を持つ文字が
+// 入っても壊れないよう、パスとしてエスケープする。
+func currencyPageURL(baseURL, symbol string) string {
+	return strings.TrimRight(baseURL, "/") + "/currencies/" + url.PathEscape(symbol)
 }
 
 // maxPositionsShown はDiscordの1メッセージあたりEmbed数上限（10）に合わせる。

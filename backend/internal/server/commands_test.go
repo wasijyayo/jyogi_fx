@@ -244,6 +244,24 @@ func responseComponentCustomIDs(resp map[string]any) []string {
 	return ids
 }
 
+// responseComponentButtons はレスポンスの components からボタン一覧をフラットに
+// 取り出す（Action Row の入れ子を辿る）。リンクボタン（issue #100）の style/url を
+// 検証するテストで使う。
+func responseComponentButtons(resp map[string]any) []map[string]any {
+	data, _ := resp["data"].(map[string]any)
+	rows, _ := data["components"].([]any)
+	var buttons []map[string]any
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		comps, _ := row["components"].([]any)
+		for _, c := range comps {
+			b, _ := c.(map[string]any)
+			buttons = append(buttons, b)
+		}
+	}
+	return buttons
+}
+
 // TestSlashCommands_操作系 は #42 CMD-2 の完了条件
 // 「Discord上で /positions → 決済ボタン → 実際に決済され残高が変わることを確認」を、
 // /price → 買うボタン → モーダル送信 → 建玉、/positions → 決済ボタン → 確認 → 決済、
@@ -446,6 +464,76 @@ func TestSlashCommands_操作系(t *testing.T) {
 		}
 		if got := embedFieldValue(t, resp, 0, "受取額"); got == "" {
 			t.Errorf("受取額fieldが空: %v", resp)
+		}
+	})
+}
+
+// TestPriceCommand_詳細チャートリンクボタン は issue #100 WEB-5 の完了条件
+// 「Discordの /price から1クリックで、その通貨のWebページが開くこと」を確認する。
+// PUBLIC_BASE_URL 設定時は style 5（リンクボタン。Interaction は発生しない）の
+// ボタンが付き、未設定時は付かないこと（起動は失敗させない）を検証する。
+func TestPriceCommand_詳細チャートリンクボタン(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	pool := connectCommandsTestDB(t, ctx)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	quoteSvc := game.NewQuoteService(pool, game.RealClock{})
+
+	newMux := func(baseURL string) *http.ServeMux {
+		return server.NewMux(server.Config{
+			DiscordPublicKey: pub,
+			Quote:            quoteSvc,
+			PublicBaseURL:    baseURL,
+			Clock:            fixedClock{now: testNow},
+		})
+	}
+
+	body := `{"type":2,"data":{"name":"price","options":[{"name":"currency","value":"JOG"}]},"member":{"user":{"id":"test-cmd-link-user"}}}`
+
+	t.Run("PUBLIC_BASE_URL設定時はリンクボタンが付く", func(t *testing.T) {
+		// 末尾にスラッシュを付けても正規化されることを兼ねて確認する。
+		resp := sendInteraction(t, newMux("https://fx.example.run.app/"), priv, body)
+
+		buttons := responseComponentButtons(resp)
+		var link map[string]any
+		var customIDs []string
+		for _, b := range buttons {
+			if style, _ := b["style"].(float64); int(style) == 5 {
+				link = b
+			}
+			if id, ok := b["custom_id"].(string); ok {
+				customIDs = append(customIDs, id)
+			}
+		}
+		if link == nil {
+			t.Fatalf("リンクボタン(style 5)が見つからない: %v", buttons)
+		}
+		if got, _ := link["url"].(string); got != "https://fx.example.run.app/currencies/JOG" {
+			t.Errorf("link url = %q, want %q", got, "https://fx.example.run.app/currencies/JOG")
+		}
+		if _, hasCustomID := link["custom_id"]; hasCustomID {
+			t.Errorf("リンクボタンにcustom_idが付いてはいけない: %v", link)
+		}
+		// 買う/売るボタンは残る。
+		if len(customIDs) != 2 {
+			t.Errorf("custom_id付きボタン数 = %d, want 2 (買う/売る): %v", len(customIDs), buttons)
+		}
+	})
+
+	t.Run("PUBLIC_BASE_URL未設定時はリンクボタンが付かない", func(t *testing.T) {
+		resp := sendInteraction(t, newMux(""), priv, body)
+		buttons := responseComponentButtons(resp)
+		for _, b := range buttons {
+			if style, _ := b["style"].(float64); int(style) == 5 {
+				t.Fatalf("PUBLIC_BASE_URL未設定なのにリンクボタンが付いている: %v", buttons)
+			}
+		}
+		if len(buttons) != 2 {
+			t.Errorf("ボタン数 = %d, want 2 (買う/売るのみ): %v", len(buttons), buttons)
 		}
 	})
 }

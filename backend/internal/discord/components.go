@@ -13,6 +13,7 @@ const (
 	ButtonStyleSecondary = 2 // 灰色。中立的な操作（キャンセル等）
 	ButtonStyleSuccess   = 3 // 緑。買い・確定などポジティブな操作
 	ButtonStyleDanger    = 4 // 赤。売り・決済などの破壊的操作
+	ButtonStyleLink      = 5 // リンクボタン。押すとURLを開き、Interactionは発生しない（issue #100）
 )
 
 // ActionRow はボタンを並べる行（type:1）。Discordの仕様上、ボタンは必ず
@@ -27,7 +28,10 @@ type Button struct {
 	Type     int    `json:"type"` // 2固定
 	Style    int    `json:"style"`
 	Label    string `json:"label"`
-	CustomID string `json:"custom_id"`
+	CustomID string `json:"custom_id,omitempty"`
+	// URL はリンクボタン（Style=ButtonStyleLink）専用。Discordの仕様上、
+	// リンクボタンは custom_id を持たず url を持つ（両方同時には持てない）。
+	URL string `json:"url,omitempty"`
 }
 
 // NewActionRow はボタンをまとめて1つのAction Rowにする簡易ヘルパー。
