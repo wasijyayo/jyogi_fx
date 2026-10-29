@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -180,6 +181,14 @@ func runServe() error {
 	profileSvc := game.NewProfileService(pool, game.RealClock{}, rankingSvc)
 	quoteSvc := game.NewQuoteService(pool, game.RealClock{})
 
+	// Discord の Embed から通貨ページへ飛ぶリンクボタンの基底 URL（#100 WEB-5）。
+	// 未設定ならボタンを付けないだけで起動は続ける。ただし値が不正だと Discord が
+	// メッセージごと拒否して /price 自体が使えなくなるため、設定ミスは起動時に落とす。
+	publicBaseURL := os.Getenv("PUBLIC_BASE_URL")
+	if err := validatePublicBaseURL(publicBaseURL); err != nil {
+		return fmt.Errorf("PUBLIC_BASE_URL: %w", err)
+	}
+
 	mux := server.NewMux(server.Config{
 		Auth:             authSvc,
 		Tick:             tickSvc,
@@ -192,9 +201,26 @@ func runServe() error {
 		SecureCookies:    secureCookies,
 		DiscordPublicKey: discordPublicKey,
 		TickSharedSecret: tickSharedSecret,
+		PublicBaseURL:    publicBaseURL,
 	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+// validatePublicBaseURL は PUBLIC_BASE_URL が http(s) の絶対 URL かを確かめる。
+// 空文字は「未設定」として許可する。
+func validatePublicBaseURL(v string) error {
+	if v == "" {
+		return nil
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		return err
+	}
+	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("http(s):// から始まる URL を指定してください: %q", v)
+	}
+	return nil
 }
 
 // decimalEnv は環境変数を decimal.Decimal として読む。未設定なら def を使う
