@@ -23,23 +23,20 @@ test('ログイン → 注文 → 決済', async ({ context, page }) => {
     { name: 'session', value: sessionId, url: 'http://localhost:8080' },
   ]);
 
-  await page.goto('/trade');
-
-  // ログイン済みなので注文フォームと建玉一覧が表示される。
-  await expect(page.getByRole('heading', { name: '新規注文' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '建玉一覧' })).toBeVisible();
-  await expect(page.getByText('保有ポジションはありません。')).toBeVisible();
-
-  // 通貨 JOG を選び、数量・レバレッジを入力して買い注文を出す。
-  await page.getByLabel('通貨').selectOption('JOG');
+  // チャートを見ながら注文する（通貨ページに注文フォームがある）。
+  await page.goto('/currencies/JOG');
+  await expect(page.getByRole('heading', { name: '新規注文（JOG）' })).toBeVisible();
   await page.getByLabel('数量').fill('10');
   await page.getByLabel('レバレッジ').fill('2');
   await page.getByRole('button', { name: '買い注文' }).click();
-
-  // 注文成立の表示と、建玉一覧への反映を確認する。
   await expect(page.getByText('注文が成立しました')).toBeVisible();
+
+  // 取引ページの建玉一覧に反映されている。
+  await page.goto('/trade');
+  await expect(page.getByRole('heading', { name: '建玉一覧' })).toBeVisible();
   const row = page.locator('li', { hasText: 'JOG' }).first();
   await expect(row).toContainText('含み損益');
+  await expect(row).toContainText('買い');
 
   // 決済（確認 → はい）。
   await row.getByRole('button', { name: '決済' }).click();

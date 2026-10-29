@@ -12,15 +12,21 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url)); // frontend/e2e/support
 const repoRoot = resolve(here, '..', '..', '..');
 
+// 環境変数 DATABASE_URL は見ない（.env の DATABASE_URL は本番 Neon を指すため、
+// シェルに残っていると本番 DB に向いたサーバーを起動してしまう）。localhost 以外も拒否する。
 function readDatabaseUrl() {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const file = join(repoRoot, '.issue-db');
   if (!existsSync(file)) {
     throw new Error(`.issue-db が見つかりません（${file}）。scripts/start-issue.sh で作った worktree で実行してください`);
   }
   const m = readFileSync(file, 'utf8').match(/^DATABASE_URL=(.+)$/m);
   if (!m) throw new Error(`${file} に DATABASE_URL が見つかりません`);
-  return m[1].trim();
+  const url = m[1].trim();
+  const host = new URL(url).hostname;
+  if (host !== 'localhost' && host !== '127.0.0.1') {
+    throw new Error(`E2E はローカル DB でしか動かしません（host=${host}）`);
+  }
+  return url;
 }
 
 const dbUrl = readDatabaseUrl();

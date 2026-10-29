@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
-  getGetMeQueryKey,
-  getListPositionsQueryKey,
   useGetMarketStatus,
   useListCurrencies,
   usePlaceOrder,
@@ -21,10 +19,16 @@ function orderErrorMessage(res: { status: number; data: unknown } | undefined): 
   return message ?? '注文に失敗しました';
 }
 
+interface OrderFormProps {
+  // 指定すると通貨をその値に固定する（通貨ページでチャートの横に置くとき）。
+  // 省略すると通貨を選べる（/trade）。
+  fixedSymbol?: string;
+}
+
 // OrderForm は新規注文フォーム（#46 WEB-2）。通貨・売買方向・数量・レバレッジを入力して
 // POST /api/orders を呼ぶ。ロジックは持たず、生成された usePlaceOrder を呼ぶだけ。
 // セッション時間外・終了1分前は canPlaceOrder が false になり UI 全体を無効化する。
-export default function OrderForm() {
+export default function OrderForm({ fixedSymbol }: OrderFormProps) {
   const queryClient = useQueryClient();
   const { data: currenciesData } = useListCurrencies();
   const { data: statusData } = useGetMarketStatus();
@@ -39,9 +43,9 @@ export default function OrderForm() {
       onSuccess: (res) => {
         if (res.status !== 200) return;
         setSize('');
-        // 建玉一覧と残高（ヘッダー）を最新にする。
-        void queryClient.invalidateQueries({ queryKey: getListPositionsQueryKey() });
-        void queryClient.invalidateQueries({ queryKey: getGetMeQueryKey() });
+        // 建玉一覧・残高（ヘッダー）に加え、注文は価格を動かすのでチャートと通貨の
+        // 価格も最新にする（#46 完了条件「チャートに自分の取引の影響が現れること」）。
+        void queryClient.invalidateQueries();
       },
     },
   });
@@ -57,7 +61,7 @@ export default function OrderForm() {
 
   const status = statusData?.data;
   const canOrder = status != null && canPlaceOrder(status);
-  const selectedSymbol = symbol || currencies[0]?.symbol || '';
+  const selectedSymbol = fixedSymbol ?? (symbol || currencies[0]?.symbol || '');
   const submitDisabled =
     !canOrder || placeOrder.isPending || selectedSymbol === '' || size.trim() === '' || leverage.trim() === '';
 
@@ -66,7 +70,7 @@ export default function OrderForm() {
 
   return (
     <section className={styles.section}>
-      <h2 className={styles.heading}>新規注文</h2>
+      <h2 className={styles.heading}>新規注文{fixedSymbol != null && `（${fixedSymbol}）`}</h2>
 
       {status != null && !canOrder && (
         <p className={styles.closedNotice} role="status">
@@ -84,6 +88,7 @@ export default function OrderForm() {
           });
         }}
       >
+        {fixedSymbol == null && (
         <div className={styles.field}>
           <label className={styles.label} htmlFor="order-symbol">
             通貨
@@ -102,6 +107,7 @@ export default function OrderForm() {
             ))}
           </select>
         </div>
+        )}
 
         <div className={styles.field}>
           <span className={styles.label}>売買方向</span>

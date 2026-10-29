@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 
-import { useGetCandles, useGetCurrency } from '../api/generated/api';
+import { useGetCandles, useGetCurrency, useGetMe } from '../api/generated/api';
 import type { GetCandlesResolution } from '../api/generated/model';
+import OrderForm from '../components/OrderForm';
 import PriceChart from '../components/PriceChart';
 import { formatChangePercent, formatPrice } from '../lib/format';
 import { PRICE_POLL_INTERVAL_MS, useIsMarketOpen } from '../lib/market';
@@ -21,6 +22,7 @@ export default function CurrencyPage() {
   const { symbol } = useParams({ from: '/currencies/$symbol' });
   const isOpen = useIsMarketOpen();
   const [resolution, setResolution] = useState<GetCandlesResolution>('1m');
+  const { data: meData } = useGetMe();
 
   const { data, isLoading } = useGetCurrency(symbol, {
     query: { refetchInterval: isOpen ? PRICE_POLL_INTERVAL_MS : false },
@@ -69,6 +71,21 @@ export default function CurrencyPage() {
         events={chart?.events ?? []}
         resolution={resolution}
       />
+
+      {/* チャートを見ながら注文できるよう、ログイン中はこの通貨の注文フォームを置く
+          （#46 WEB-2。design.md §6.3）。未ログインならチャートだけを見せる（#45 決定事項）。 */}
+      {meData?.status === 200 ? (
+        <div className={styles.order}>
+          <OrderForm fixedSymbol={c.symbol} />
+          <a className={styles.tradeLink} href="/trade">
+            建玉一覧・決済は「取引」へ
+          </a>
+        </div>
+      ) : (
+        <p className={styles.loginHint}>
+          <a href="/auth/discord/login">Discordでログイン</a>すると、この画面から注文できます
+        </p>
+      )}
     </main>
   );
 }

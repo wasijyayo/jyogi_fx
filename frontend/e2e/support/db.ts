@@ -13,13 +13,19 @@ import { Client } from 'pg';
 const supportDir = dirname(fileURLToPath(import.meta.url)); // frontend/e2e/support
 const repoRoot = resolve(supportDir, '..', '..', '..');
 
-// databaseUrl は .issue-db から DATABASE_URL を得る。環境変数 DATABASE_URL があれば優先。
+// databaseUrl は .issue-db から DATABASE_URL を得る。
+// 環境変数 DATABASE_URL は見ない（.env の DATABASE_URL は本番 Neon を指すため、
+// シェルに残っていると本番 DB を書き換え・削除してしまう）。念のため localhost 以外も拒否する。
 function databaseUrl(): string {
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const file = join(repoRoot, '.issue-db');
   const m = readFileSync(file, 'utf8').match(/^DATABASE_URL=(.+)$/m);
   if (!m) throw new Error(`${file} に DATABASE_URL が見つかりません`);
-  return m[1].trim();
+  const url = m[1].trim();
+  const host = new URL(url).hostname;
+  if (host !== 'localhost' && host !== '127.0.0.1') {
+    throw new Error(`E2E はローカル DB でしか動かしません（host=${host}）`);
+  }
+  return url;
 }
 
 // createTestSession は E2E 用のユーザーとセッションを作る。残高は注文テストが

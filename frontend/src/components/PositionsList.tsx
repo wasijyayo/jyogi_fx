@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
-  getGetMeQueryKey,
-  getListPositionsQueryKey,
   useClosePosition,
   useListPositions,
 } from '../api/generated/api';
@@ -42,9 +40,9 @@ export default function PositionsList() {
       onSuccess: (res) => {
         setConfirmingId(null);
         if (res.status !== 200) return;
-        // 建玉一覧と残高（ヘッダー）を最新にする。
-        void queryClient.invalidateQueries({ queryKey: getListPositionsQueryKey() });
-        void queryClient.invalidateQueries({ queryKey: getGetMeQueryKey() });
+        // 建玉一覧・残高（ヘッダー）に加え、決済は価格を動かすのでチャートと通貨の
+        // 価格も最新にする（#46 完了条件「チャートに自分の取引の影響が現れること」）。
+        void queryClient.invalidateQueries();
       },
     },
   });
@@ -68,7 +66,7 @@ export default function PositionsList() {
             <li key={p.id} className={styles.row}>
               <div className={styles.rowMain}>
                 <span className={styles.symbol}>{p.symbol}</span>
-                <span className={isLoss(p.unrealizedPnl) ? styles.sideShort : styles.sideLong}>
+                <span className={p.side === 'short' ? styles.sideShort : styles.sideLong}>
                   {formatSide(p.side)}
                 </span>
                 <span className={styles.size}>{formatPrice(p.size)}</span>
