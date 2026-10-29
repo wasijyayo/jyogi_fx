@@ -1269,19 +1269,21 @@ CREATE TABLE rate_datasets (          -- 取り込み単位（取得元・ファ
     fetched_on  DATE         NOT NULL,   -- 取得日
     sha256      TEXT         NOT NULL,   -- ファイル内容の SHA-256
     imported_at TIMESTAMPTZ  NOT NULL,
-    UNIQUE (pair_id, sha256)             -- 同じ内容のファイルは同じデータセット
+    UNIQUE (pair_id, sha256),            -- 同じ内容のファイルは同じデータセット
+    UNIQUE (id, pair_id)                 -- daily_rates の複合 FK の参照先。ペアの食い違いを防ぐ
 );
 
 CREATE TABLE daily_rates (            -- 1 行 = 1 通貨ペアの 1 日（平日のみ）
     id         BIGSERIAL     PRIMARY KEY,
-    dataset_id BIGINT        NOT NULL REFERENCES rate_datasets(id),
+    dataset_id BIGINT        NOT NULL,
     pair_id    BIGINT        NOT NULL REFERENCES currency_pairs(id),
     date       DATE          NOT NULL,  -- ts（UTC の Unix 秒）の日付
     open       NUMERIC(20,8) NOT NULL,
     high       NUMERIC(20,8) NOT NULL,
     low        NUMERIC(20,8) NOT NULL,
     close      NUMERIC(20,8) NOT NULL,
-    UNIQUE (dataset_id, date)
+    UNIQUE (dataset_id, date),
+    FOREIGN KEY (dataset_id, pair_id) REFERENCES rate_datasets (id, pair_id)
 );
 
 CREATE INDEX idx_daily_rates_pair_date ON daily_rates (pair_id, date);

@@ -27,7 +27,8 @@ CREATE TABLE rate_datasets (
     fetched_on  DATE         NOT NULL,   -- 取得日
     sha256      TEXT         NOT NULL,   -- ファイル内容（.json.gz）の SHA-256
     imported_at TIMESTAMPTZ  NOT NULL,   -- 取り込んだ時刻
-    UNIQUE (pair_id, sha256)
+    UNIQUE (pair_id, sha256),
+    UNIQUE (id, pair_id)                 -- daily_rates の複合 FK の参照先。ペアの食い違いを防ぐ
 );
 
 -- daily_rates: 1 行 = 1 通貨ペアの 1 日（平日のみ）。一意キーは（データセット, 日付）。
@@ -35,15 +36,21 @@ CREATE TABLE rate_datasets (
 -- 新しいデータセットとして取り込む。#102）。ask 側（ao/ah/al/ac）と出来高（v）は保存しない。
 CREATE TABLE daily_rates (
     id         BIGSERIAL     PRIMARY KEY,
-    dataset_id BIGINT        NOT NULL REFERENCES rate_datasets(id),
+    dataset_id BIGINT        NOT NULL,
     pair_id    BIGINT        NOT NULL REFERENCES currency_pairs(id),
     date       DATE          NOT NULL,   -- ts（UTC の Unix 秒）の日付
     open       NUMERIC(20,8) NOT NULL,
     high       NUMERIC(20,8) NOT NULL,
     low        NUMERIC(20,8) NOT NULL,
     close      NUMERIC(20,8) NOT NULL,
-    UNIQUE (dataset_id, date)
+    UNIQUE (dataset_id, date),
+    -- dataset_id 単独でなく (dataset_id, pair_id) を参照することで、
+    -- 「データセットの通貨ペアと行の通貨ペアが食い違う」状態を DB で防ぐ。
+    FOREIGN KEY (dataset_id, pair_id) REFERENCES rate_datasets (id, pair_id)
 );
+
+-- #103 で「ペアと日付の範囲」で引くためのインデックス。
+CREATE INDEX idx_daily_rates_pair_date ON daily_rates (pair_id, date);
 
 -- §13「対象と期間」の4ペアをシステムで投入する（#111 で決定）。
 -- 000003_seed_currencies と同じく、コードにペア名や上限値を埋め込まない。

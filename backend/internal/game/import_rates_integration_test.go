@@ -34,11 +34,17 @@ func insertTestPair(t *testing.T, ctx context.Context, pool *pgxpool.Pool, symbo
 
 	// 前回のテスト失敗等で同名の行が残っていた場合に備え、先に掃除する
 	// （currency_pairs.symbol は UNIQUE 制約があるため、残っていると INSERT が失敗する）。
-	_, _ = pool.Exec(ctx,
-		`DELETE FROM daily_rates WHERE pair_id IN (SELECT id FROM currency_pairs WHERE symbol = $1)`, symbol)
-	_, _ = pool.Exec(ctx,
-		`DELETE FROM rate_datasets WHERE pair_id IN (SELECT id FROM currency_pairs WHERE symbol = $1)`, symbol)
-	_, _ = pool.Exec(ctx, `DELETE FROM currency_pairs WHERE symbol = $1`, symbol)
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM daily_rates WHERE pair_id IN (SELECT id FROM currency_pairs WHERE symbol = $1)`, symbol); err != nil {
+		t.Fatalf("pre-cleanup: delete daily_rates: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM rate_datasets WHERE pair_id IN (SELECT id FROM currency_pairs WHERE symbol = $1)`, symbol); err != nil {
+		t.Fatalf("pre-cleanup: delete rate_datasets: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM currency_pairs WHERE symbol = $1`, symbol); err != nil {
+		t.Fatalf("pre-cleanup: delete currency_pairs: %v", err)
+	}
 
 	var p db.CurrencyPair
 	row := pool.QueryRow(ctx, `
