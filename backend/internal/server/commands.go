@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -312,8 +313,10 @@ func handlePriceCommand(ctx context.Context, cfg Config, req interactionRequest,
 // PUBLIC_BASE_URL（例: https://xxx.run.app）は末尾にスラッシュが付いていても
 // 付いていなくても同じ URL になるよう正規化する。symbol は通貨テーブルの値
 // （quote.Symbol）を使うため、通貨をハードコードしない（CLAUDE.md §5.3）。
+// ユーザー作成通貨（CLAUDE.md §5.3）の記号に URL で特別な意味を持つ文字が
+// 入っても壊れないよう、パスとしてエスケープする。
 func currencyPageURL(baseURL, symbol string) string {
-	return strings.TrimRight(baseURL, "/") + "/currencies/" + symbol
+	return strings.TrimRight(baseURL, "/") + "/currencies/" + url.PathEscape(symbol)
 }
 
 // maxPositionsShown はDiscordの1メッセージあたりEmbed数上限（10）に合わせる。
