@@ -1,0 +1,262 @@
+name: Preview
+
+# issue #109 [DEPLOY-3]: PR ごとのプレビュー環境を Cloud Run に出し、URL を PR にコメントする。
+#
+# 本番（deploy.yml の fxgame）とは別のサービス fxgame-preview に、トラフィックを流さない
+# リビジョンを pr-<番号> タグで出す。準備手順と制約は dev-guide.md §2.1「プレビュー環境」を参照。
+#
+# PR のコードはマージ前で、/goal のエージェントが書いたものも含む。そのため
+# 「PR のコードを動かすジョブ」と「GCP の権限を持つジョブ」を分けている。
+#   build  : PR のコードを checkout してイメージを作る。GCP の認証情報は持たない
+#            （id-token を付けない）。持つ秘密情報はプレビュー用 DB の URL だけ
+#   deploy : イメージを push して fxgame-preview にデプロイする。PR のコードは一切実行しない
+# gcloud run deploy --source を使わないのは、Cloud Build が PR の Dockerfile を
+# 強い権限（roles/editor）のサービスアカウントで実行してしまうため。
+#
+# deploy.yml と同じく、CI が成功した後にだけ走る（workflow_run）。
+# workflow_run はこのファイルを default ブランチ側のものを使って実行するため、
+# PR 側でこのワークフロー自体を書き換えても、マージされるまでは反映されない。
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  # PR が閉じたときの後始末は pull_request_target で受ける。pull_request だと ref が
+  # refs/pull/<番号>/merge になり、main ブランチだけを信頼する Workload Identity の
+  # 条件で認証が通らないため。PR のコードは checkout しないので安全。
+  pull_request_target:
+    types: [closed]
+
+env:
+  SERVICE: fxgame-preview
+  REGION: asia-northeast1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # pull_requests[0] は同じリポジトリのブランチからの PR でだけ埋まる（fork の PR は空）。
+    # 念のため head_repository でも同じリポジトリであることを確かめる。
+    if: >
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0] != null &&
+      vars.PREVIEW_ENABLED == 'true'
+
+    # 同じ PR への push が続いたら、古いものは取り消して最新だけを出す。
+    concurrency:
+      group: preview-pr-${{ github.event.workflow_run.pull_requests[0].number }}
+      cancel-in-progress: true
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # CI が実際に検証した PR のコミットを明示的に指定する。
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      # cache: false: workflow_run は main と同じキャッシュを共有するため、
+      # PR のコードが main のビルドに使われるキャッシュを書き換えられないようにする。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      - name: Add Go bin dir to PATH
+        run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # deploy.yml と同じく、バックエンドの生成コードを先に用意する
+      # （Dockerfile はバックエンドの生成を行わないため）。
+      - name: Install sqlc
+        uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.31.1"
+
+      - name: Install oapi-codegen
+        run: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0
+
+      - name: Generate backend code (oapi-codegen + sqlc)
+        run: |
+          oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
+          (cd backend && sqlc generate)
+
+      # プレビュー用 DB に PR のマイグレーションを適用する。
+      # DB は全 PR で共有するため、マイグレーションを含む PR を閉じたら
+      # Neon のブランチを作り直す（dev-guide.md §2.1「プレビュー環境」）。
+      - name: Install golang-migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+
+      - name: Apply migrations to preview DB
+        env:
+          PREVIEW_DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
+        run: migrate -path backend/db/migrations -database "$PREVIEW_DATABASE_URL" up
+
+      - name: Build image
+        run: |
+          docker build -t preview-image .
+          docker save preview-image -o image.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-image
+          path: image.tar
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # cleanup と同じグループに入れ、タグの付け外しが同時に進まないようにする。
+    # cancel-in-progress は false: 途中で取り消すと、cleanup の途中で止まったり
+    # 古いデプロイが新しいデプロイを取り消したりしうるため。順番待ちにして、
+    # 古いものかどうかは下の「Check PR is open and up to date」で判定する。
+    concurrency:
+      group: preview-tag-pr-${{ github.event.workflow_run.pull_requests[0].number }}
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation に必要
+      pull-requests: write # PR へのコメント
+      issues: write # PR のコメントは Issue のコメントとして扱われる
+
+    env:
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      # ジョブの env からはワークフローの env を参照できないため、リージョンを直接書く。
+      IMAGE: asia-northeast1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/fxgame-preview/app
+
+    # このジョブでは checkout しない。build ジョブから受け取るのはイメージの tar だけで、
+    # docker load で読み込んで push するだけ（中身はここでは実行しない）。
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: preview-image
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          # 本番用（GCP_SERVICE_ACCOUNT）とは別の、fxgame-preview だけを触れるアカウント。
+          service_account: ${{ vars.GCP_PREVIEW_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Push image
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker load -i image.tar
+          docker tag preview-image "$IMAGE:pr-$PR_NUMBER-$HEAD_SHA"
+          docker push "$IMAGE:pr-$PR_NUMBER-$HEAD_SHA"
+
+      # 同じ PR の CI が前後して終わると、古いコミットのデプロイが後から来ることがある。
+      # また、デプロイを待つ間に PR が閉じられることもある。タグを付ける直前に PR の
+      # 状態を確かめ、閉じている・最新のコミットでない場合は何もせず終える。
+      - name: Check PR is open and up to date
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r state head < <(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '"\(.state) \(.head.sha)"')
+          if [ "$state" != "open" ] || [ "$head" != "$HEAD_SHA" ]; then
+            echo "PR #$PR_NUMBER は state=$state head=${head:0:7}。$HEAD_SHA は公開しない"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --no-traffic: サービスの既定の URL には流さず、タグの URL でだけ開けるようにする。
+      # --service-account: PR のコードを、権限を何も持たない実行用アカウントで動かす
+      #   （既定の Compute Engine アカウントは roles/editor を持つため、毎回明示して固定する）。
+      # 環境変数のフラグは付けない（fxgame-preview に手動で設定したものを引き継ぐ）。
+      - name: Deploy preview revision
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE:pr-$PR_NUMBER-$HEAD_SHA" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --service-account "${{ vars.GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT }}" \
+            --no-traffic \
+            --tag "pr-$PR_NUMBER" \
+            --quiet
+
+      - name: Get preview URL
+        if: steps.check.outputs.skip != 'true'
+        id: url
+        run: |
+          url=$(gcloud run services describe "$SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --format=json | jq -r --arg tag "pr-$PR_NUMBER" '.status.traffic[] | select(.tag == $tag) | .url')
+          if [ -z "$url" ]; then
+            echo "pr-$PR_NUMBER のタグの URL が見つかりません" >&2
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # 2 回目以降の push では、新しいコメントを増やさず前回のコメントを書き換える。
+      - name: Comment preview URL on PR
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_URL: ${{ steps.url.outputs.url }}
+        run: |
+          body=$(cat <<EOF
+          ### プレビュー
+          ${PREVIEW_URL}
+
+          - コミット: \`${HEAD_SHA:0:7}\`
+          - 本番とは別の環境（\`$SERVICE\`・プレビュー用 DB）で動いています
+          - Discord ログインは使えません。tick が来ないので価格は動きません
+          EOF
+          )
+          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$body" --edit-last --create-if-none
+
+  cleanup:
+    runs-on: ubuntu-latest
+    # PR が閉じたら（マージ・クローズとも）タグを外し、URL で開けないようにする。
+    # リビジョン自体はトラフィックがなければ 0 台まで縮むので残しておいてよい。
+    if: >
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.PREVIEW_ENABLED == 'true'
+
+    # deploy と同じグループで順番待ちにする。デプロイ中に PR が閉じられても、
+    # そのデプロイが終わってからタグを外すので、閉じた PR の URL が残らない。
+    concurrency:
+      group: preview-tag-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PREVIEW_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # CI が失敗してプレビューが出なかった PR では、タグが存在しないので何もしない。
+      - name: Remove preview tag
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          tags=$(gcloud run services describe "$SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --format=json | jq -r '.status.traffic[].tag // empty')
+          if ! grep -qx "pr-$PR_NUMBER" <<<"$tags"; then
+            echo "pr-$PR_NUMBER のタグはありません"
+            exit 0
+          fi
+          gcloud run services update-traffic "$SERVICE" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "$REGION" \
+            --remove-tags "pr-$PR_NUMBER" \
+            --quiet
