@@ -34,6 +34,12 @@ type Config struct {
 	// `Authorization: Bearer <secret>` ヘッダを付ける。
 	TickSharedSecret string
 
+	// PublicBaseURL はこの Web アプリの公開 URL（例: https://xxx.run.app）。
+	// Discord の Embed から通貨ページ（/currencies/:symbol）へ飛ぶリンクボタンの
+	// 組み立てに使う（issue #100 WEB-5）。未設定ならリンクボタンを付けない
+	// （起動は失敗させない）。
+	PublicBaseURL string
+
 	// Clock は署名タイムスタンプの鮮度検査・tick処理の現在時刻に使う
 	// （CLAUDE.md §5.1: 時刻は必ず注入する）。未設定なら RealClock を使う。
 	Clock game.Clock

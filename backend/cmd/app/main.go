@@ -192,6 +192,7 @@ func runServe() error {
 		SecureCookies:    secureCookies,
 		DiscordPublicKey: discordPublicKey,
 		TickSharedSecret: tickSharedSecret,
+		PublicBaseURL:    os.Getenv("PUBLIC_BASE_URL"),
 	})
 	log.Printf("listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
