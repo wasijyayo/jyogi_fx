@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { Candle } from '../api/generated/model';
 import {
+  OPENING_CANDLE_COLOR,
+  candleBodyColor,
   formatEventLabel,
   interpolateMissingCandles,
   isoToUnixSeconds,
@@ -107,6 +109,16 @@ describe('interpolateMissingCandles', () => {
     expect(got[1].basePrice).toBeCloseTo(100, 6);
     expect(got[2].close).toBeCloseTo(120, 6);
     expect(got[2].basePrice).toBeCloseTo(110, 6);
+  });
+});
+
+describe('candleBodyColor', () => {
+  it('寄り付き足は専用色を返す', () => {
+    expect(candleBodyColor(true)).toBe(OPENING_CANDLE_COLOR);
+  });
+
+  it('通常・補間された足は undefined（既定の up/down 色）を返す', () => {
+    expect(candleBodyColor(false)).toBeUndefined();
   });
 });
 

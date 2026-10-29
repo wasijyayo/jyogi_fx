@@ -1,4 +1,4 @@
-import type { Candle, ChartEvent } from '../api/generated/model';
+import type { Candle } from '../api/generated/model';
 
 // チャート描画用の純粋関数群。ここでは価格の decimal 文字列を数値へ変換して
 // lightweight-charts が描ける形（Unix秒 + 数値）に組み立てる。
@@ -10,6 +10,17 @@ import type { Candle, ChartEvent } from '../api/generated/model';
 
 // ONE_MINUTE_SECONDS は1分足のステップ幅（秒）。
 export const ONE_MINUTE_SECONDS = 60;
+
+// OPENING_CANDLE_COLOR は寄り付き足（is_opening = TRUE）の色。実価格の赤/緑（up/down）と
+// 区別できる橙にする（design.md §2.8「is_opening = TRUE の行は色を変える」）。
+export const OPENING_CANDLE_COLOR = '#ff9800';
+
+// candleBodyColor は足の色を決める純粋関数。寄り付き足なら OPENING_CANDLE_COLOR、
+// 通常・補間された足（isOpening = false）なら undefined を返す（undefined の場合は
+// シリーズ既定の up/down 色を使う）。
+export function candleBodyColor(isOpening: boolean): string | undefined {
+  return isOpening ? OPENING_CANDLE_COLOR : undefined;
+}
 
 // ChartPoint は lightweight-charts に渡せる数値表現のローソク足1本。
 export interface ChartPoint {
@@ -114,9 +125,4 @@ export function formatEventLabel(type: string, magnitude: string): string {
     default:
       return type;
   }
-}
-
-// eventTimeToUnixSeconds はイベントの発火時刻を Unix秒に変換する（注釈マーカーの x 座標用）。
-export function eventTimeToUnixSeconds(event: ChartEvent): number {
-  return isoToUnixSeconds(event.time);
 }

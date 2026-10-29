@@ -20,6 +20,7 @@ import {
 import type { Candle, ChartEvent, GetCandlesResolution } from '../api/generated/model';
 import {
   ONE_MINUTE_SECONDS,
+  candleBodyColor,
   formatEventLabel,
   interpolateMissingCandles,
   isoToUnixSeconds,
@@ -41,7 +42,7 @@ interface PriceChartProps {
 // 描くもの（design.md §3.4/§3.5）:
 //   - 実価格のローソク足（太い実体。1分足はヒゲなし、5分足でヒゲが出る）
 //   - base_price（人がいなかった場合の価格）を薄い線で重ねる → 乖離が「人間が動かした分」
-//   - 寄り付き（is_opening）と発火済みイベントをマーカーで注釈
+//   - 寄り付き（is_opening）は足の色を変えて区別（＋「寄り付き」マーカー）、発火済みイベントを注釈
 export default function PriceChart({ candles, events, resolution }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -136,12 +137,16 @@ export default function PriceChart({ candles, events, resolution }: PriceChartPr
 }
 
 function toCandlestickData(p: ChartPoint): CandlestickData<Time> {
+  // 寄り付き足（is_opening）は 1 本ごとの色で区別する（design.md §2.8）。補間された足は
+  // isOpening = false なので candleBodyColor が undefined を返し、通常の up/down 色になる。
+  const color = candleBodyColor(p.isOpening);
   return {
     time: p.time as UTCTimestamp,
     open: p.open,
     high: p.high,
     low: p.low,
     close: p.close,
+    ...(color === undefined ? {} : { color, borderColor: color, wickColor: color }),
   };
 }
 
