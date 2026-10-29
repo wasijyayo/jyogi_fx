@@ -1,0 +1,403 @@
+.main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notice {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #f0c36d;
+  border-radius: 8px;
+  background: #fff8e1;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.tentative {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eceff1;
+  color: #607d8b;
+  font-size: 11px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+
+.card {
+  padding: 14px 16px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+  min-width: 0;
+}
+
+.heading {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.sub {
+  margin: 0;
+  color: #666;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* 年代・進行・操作 */
+.status {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.era {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.eraLabel {
+  color: #666;
+  font-size: 12px;
+}
+
+.eraValue {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.progressText {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 6px;
+}
+
+.progressBar {
+  height: 8px;
+  border-radius: 4px;
+  background: #eceff1;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: #1e6fd9;
+  transition: width 0.3s;
+}
+
+.controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.primary,
+.secondary,
+.toggle,
+.toggleActive {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.primary {
+  border: 1px solid #1e6fd9;
+  background: #1e6fd9;
+  color: #fff;
+  font-weight: 600;
+}
+
+.secondary,
+.toggle {
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #333;
+}
+
+.toggleActive {
+  border: 1px solid #1e6fd9;
+  background: #e8f0fc;
+  color: #1e6fd9;
+  font-weight: 600;
+}
+
+.primary:disabled,
+.buy:disabled,
+.sell:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 通貨ペアの切り替え */
+.pairs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.pair,
+.pairActive {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pair {
+  border: 1px solid #e2e2e2;
+}
+
+.pairActive {
+  border: 2px solid #1e6fd9;
+  padding: 9px 11px;
+}
+
+.pairSymbol {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.pairPrice {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #1e6fd9;
+  color: #fff;
+  font-size: 11px;
+}
+
+/* チャートと注文 */
+.layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+
+.chart {
+  width: 100%;
+  height: 300px;
+}
+
+.amounts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.amountInput {
+  width: 90px;
+  padding: 7px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.orderButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.buy,
+.sell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.buy {
+  background: #26a69a;
+}
+
+.sell {
+  background: #ef5350;
+}
+
+.hint {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+.error {
+  margin: 10px 0 0;
+  color: #c62828;
+  font-size: 13px;
+}
+
+/* 成績 */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.summary dt {
+  color: #666;
+  font-size: 12px;
+}
+
+.summary dd {
+  margin: 2px 0 0;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.total dd {
+  font-weight: 700;
+}
+
+.profit {
+  color: #1b8a7e;
+}
+
+.loss {
+  color: #d32f2f;
+}
+
+/* 保有一覧 */
+.positions,
+.history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.position {
+  display: grid;
+  grid-template-columns: 140px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid #f0f0f0;
+}
+
+.position:first-child {
+  border-top: none;
+}
+
+.positionPair {
+  font-weight: 700;
+}
+
+.sideBuy,
+.sideSell {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.sideBuy {
+  background: #26a69a;
+}
+
+.sideSell {
+  background: #ef5350;
+}
+
+.positionDetail {
+  color: #555;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.positionProfit {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.history li {
+  padding: 4px 0;
+  font-size: 13px;
+  color: #555;
+}
+
+/* 終了 */
+.result {
+  padding: 20px;
+  border: 2px solid #1e6fd9;
+  border-radius: 8px;
+  background: #f3f7fd;
+  text-align: center;
+}
+
+.result h2 {
+  margin: 0 0 8px;
+}
+
+.result p {
+  margin: 0 0 8px;
+}
+
+@media (max-width: 720px) {
+  .status {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .pairs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chart {
+    height: 240px;
+  }
+
+  .summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .position {
+    grid-template-columns: 1fr auto auto;
+  }
+
+  .positionDetail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}

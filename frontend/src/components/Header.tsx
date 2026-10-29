@@ -43,7 +43,14 @@ export default function Header() {
 
   return (
     <header className={styles.header}>
-      <span className={styles.brand}>fxgame</span>
+      <nav className={styles.nav}>
+        <a className={styles.brand} href="/">
+          fxgame
+        </a>
+        <a className={styles.navLink} href="/demo">
+          デモ
+        </a>
+      </nav>
       <div className={styles.right}>
         {statusData && (
           <span className={styles.marketStatus}>{formatMarketStatus(statusData.data)}</span>
