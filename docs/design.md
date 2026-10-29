@@ -1244,6 +1244,52 @@ CREATE TABLE price_ticks (             -- §2.8。セッション中の60tick + 
 CREATE INDEX idx_price_ticks_session ON price_ticks (session_id, currency_id, tick_index);
 ```
 
+### 過去チャートモードのテーブル（#102 REPLAY-2）
+
+過去チャートモード（§13）用の実レート（EV Trading Labs の日足）。通常モードの
+`price_ticks`（合成レート）とは別テーブル。金額は `NUMERIC(20,8)`（CLAUDE.md §5.2）。
+通貨ペアは行として扱い、コードにハードコードしない（CLAUDE.md §5.3）。DDL はマイグレーション
+`000009_historical_rates` で確定。
+
+```sql
+CREATE TABLE currency_pairs (          -- 過去チャートモードで扱う通貨ペア（§13）
+    id             BIGSERIAL    PRIMARY KEY,
+    symbol         TEXT         NOT NULL UNIQUE,  -- 表示名兼キー（例 'USD/JPY'）
+    base_currency  TEXT         NOT NULL,         -- 基軸通貨コード（例 'USD'）
+    quote_currency TEXT         NOT NULL,         -- 決済通貨コード（例 'JPY'）
+    max_leverage   NUMERIC(6,2) NOT NULL,         -- レバレッジの初期上限（USD/JPY 25、他 30）
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE rate_datasets (          -- 取り込み単位（取得元・ファイル名・取得日を記録）
+    id          BIGSERIAL    PRIMARY KEY,
+    pair_id     BIGINT       NOT NULL REFERENCES currency_pairs(id),
+    source      TEXT         NOT NULL,   -- 取得元（例 'EV Trading Labs'）
+    filename    TEXT         NOT NULL,
+    fetched_on  DATE         NOT NULL,   -- 取得日
+    sha256      TEXT         NOT NULL,   -- ファイル内容の SHA-256
+    imported_at TIMESTAMPTZ  NOT NULL,
+    UNIQUE (pair_id, sha256)             -- 同じ内容のファイルは同じデータセット
+);
+
+CREATE TABLE daily_rates (            -- 1 行 = 1 通貨ペアの 1 日（平日のみ）
+    id         BIGSERIAL     PRIMARY KEY,
+    dataset_id BIGINT        NOT NULL REFERENCES rate_datasets(id),
+    pair_id    BIGINT        NOT NULL REFERENCES currency_pairs(id),
+    date       DATE          NOT NULL,  -- ts（UTC の Unix 秒）の日付
+    open       NUMERIC(20,8) NOT NULL,
+    high       NUMERIC(20,8) NOT NULL,
+    low        NUMERIC(20,8) NOT NULL,
+    close      NUMERIC(20,8) NOT NULL,
+    UNIQUE (dataset_id, date)
+);
+
+CREATE INDEX idx_daily_rates_pair_date ON daily_rates (pair_id, date);
+```
+
+4 ペアの投入は `000003_seed_currencies` と同じくマイグレーションで行う（`ON CONFLICT DO NOTHING`）。
+取り込みは `ON CONFLICT DO NOTHING`（上書きしない。値を直すなら新しいデータセット）。
+
 ### UPSERT（冪等性の確保）
 
 ```sql
@@ -1535,7 +1581,8 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
   1 日の始値・高値・安値・終値が必要になり、FRB H.10 → Frankfurter v2 から変更した。
   - 配布ページ: https://evtradelabs.com/data（`.json.gz`、通貨ペア・年ごとに 1 ファイル）。
     列は `ts, o, h, l, c, ao, ah, al, ac, v`。`ts` は UTC の Unix 秒で、D1 は 00:00 UTC 始まり。
-    `o/h/l/c` を使う（`ao` などの意味はページに説明がないため、取り込み時に確認する。#102）。
+    `o/h/l/c`（bid）を使う。`ao/ah/al/ac` は ask 側の値、`v` は出来高（#102 で実物を確認して確定）。
+    取り込みでは ask 側（ao/ah/al/ac）と出来高（v）は保存しない。
   - 確定した年（今年以外）の D1 は登録不要でダウンロードできる。取り込みはダウンロードした
     ファイルを読む手動バッチにする（#102）。
   - 利用条件（2026-10-30 確認）: 「License: free use with attribution to EV Trading Labs」
@@ -1545,7 +1592,9 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
     4 ペアをそろえるため、**2015 年以降**を使う。
 - 画面に「出典: EV Trading Labs」を表示する（#105）。
 - 取り込み時に、取得元・ファイル名・取得日を記録する（#102）。
-- 週末・祝日の行があるかはページに書かれていない。取り込み時に確認し、ゲームでは使わない（#102）。
+- 週末・祝日の行（#102 で実物を確認）: **土曜の行は無く、日曜の行はある**（出来高の小さい短い足）。
+  祝日の扱いは一定しない（例えば 2015-01-01 は有るが 2016-01-01 は無い）。取り込みでは
+  土曜・日曜を保存せず、無い平日は補わない（ゲームでは使わない）。
 - 検討して見送った候補（2026-10-29〜30 に規約を確認）:
   - Frankfurter v2: 条件は良いが 1 日 1 つの値しかなく、ローソク足を描けない（#111 で一度採用してから変更）
   - FRB H.10: パブリックドメインだが 1 日 1 つの値のみ
@@ -1694,6 +1743,16 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
   **取り込み済みのレートは上書きしない。** 値を直す必要があれば新しいデータセットとして取り込み、
   ゲームはどのデータセットを使ったかを持つ。こうすると、再取り込みの後も過去のゲームのスコアを
   同じレートで計算し直せる（#102・#103）。
+  #102 で追加したテーブル（DDL は §8 に反映済み）:
+  - `currency_pairs`: 通貨ペア。`symbol`（表示名兼キー。例 `USD/JPY`）と基軸・決済通貨の
+    コード、レバレッジの初期上限 `max_leverage` を持つ。4 ペア（USD/JPY・EUR/USD・GBP/USD・
+    AUD/USD）をマイグレーションで投入する。
+  - `rate_datasets`: 取り込み単位（1 ファイル = 1 データセット）。通貨ペア・取得元・
+    ファイル名・取得日・ファイル内容の SHA-256・取り込んだ時刻を持つ。同じ通貨ペアで
+    同じ内容（SHA-256）のファイルは同じデータセットとして扱う（再実行で増えない）。
+  - `daily_rates`: 1 行 = 1 通貨ペアの 1 日（平日のみ）。データセット・通貨ペア・日付・
+    始値・高値・安値・終値。一意キーは（データセット, 日付）。ask 側（ao/ah/al/ac）と
+    出来高（v）は保存しない。
 - ゲーム: 開始時刻・区間・データセット・速さの変更履歴・プレイヤー（`users` 参照 or ゲスト名）・
   資金・スコア等（#103）。
 - 建玉: ゲームと**通貨ペア**を参照し、売買の向き・証拠金・レバレッジ・取得値・取得日・強制決済ラインを持つ。
