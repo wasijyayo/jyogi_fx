@@ -3,9 +3,15 @@ name: Preview
 # issue #109 [DEPLOY-3]: PR ごとのプレビュー環境を Cloud Run に出し、URL を PR にコメントする。
 #
 # 本番（deploy.yml の fxgame）とは別のサービス fxgame-preview に、トラフィックを流さない
-# リビジョンを pr-<番号> タグで出す。fxgame-preview は本番とは別の DB（Neon のブランチ）と
-# 環境変数を持つため、マージ前のコードが本番 DB や本番の秘密情報に触れることはない。
-# 準備手順と制約は dev-guide.md §2.1「プレビュー環境」 を参照。
+# リビジョンを pr-<番号> タグで出す。準備手順と制約は dev-guide.md §2.1「プレビュー環境」を参照。
+#
+# PR のコードはマージ前で、/goal のエージェントが書いたものも含む。そのため
+# 「PR のコードを動かすジョブ」と「GCP の権限を持つジョブ」を分けている。
+#   build  : PR のコードを checkout してイメージを作る。GCP の認証情報は持たない
+#            （id-token を付けない）。持つ秘密情報はプレビュー用 DB の URL だけ
+#   deploy : イメージを push して fxgame-preview にデプロイする。PR のコードは一切実行しない
+# gcloud run deploy --source を使わないのは、Cloud Build が PR の Dockerfile を
+# 強い権限（roles/editor）のサービスアカウントで実行してしまうため。
 #
 # deploy.yml と同じく、CI が成功した後にだけ走る（workflow_run）。
 # workflow_run はこのファイルを default ブランチ側のものを使って実行するため、
@@ -16,7 +22,7 @@ on:
     types: [completed]
   # PR が閉じたときの後始末は pull_request_target で受ける。pull_request だと ref が
   # refs/pull/<番号>/merge になり、main ブランチだけを信頼する Workload Identity の
-  # 条件（dev-guide.md §4）で認証が通らないため。PR のコードは checkout しないので安全。
+  # 条件で認証が通らないため。PR のコードは checkout しないので安全。
   pull_request_target:
     types: [closed]
 
@@ -25,7 +31,7 @@ env:
   REGION: asia-northeast1
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     # pull_requests[0] は同じリポジトリのブランチからの PR でだけ埋まる（fork の PR は空）。
     # 念のため head_repository でも同じリポジトリであることを確かめる。
@@ -37,37 +43,33 @@ jobs:
       github.event.workflow_run.pull_requests[0] != null &&
       vars.PREVIEW_ENABLED == 'true'
 
-    # 同じ PR への push が続いたら、古いデプロイは取り消して最新だけを出す。
+    # 同じ PR への push が続いたら、古いものは取り消して最新だけを出す。
     concurrency:
       group: preview-pr-${{ github.event.workflow_run.pull_requests[0].number }}
       cancel-in-progress: true
 
     permissions:
       contents: read
-      id-token: write # Workload Identity Federation に必要
-      pull-requests: write # PR へのコメント
-      issues: write # PR のコメントは Issue のコメントとして扱われる
-
-    env:
-      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           # CI が実際に検証した PR のコミットを明示的に指定する。
           ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
 
+      # cache: false: workflow_run は main と同じキャッシュを共有するため、
+      # PR のコードが main のビルドに使われるキャッシュを書き換えられないようにする。
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          cache: false
 
       - name: Add Go bin dir to PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      # deploy.yml と同じ理由で、バックエンドの生成コードを先に用意する
-      # （gcloud は .gitignore を尊重しないため、生成しないと Cloud Build が失敗する）。
+      # deploy.yml と同じく、バックエンドの生成コードを先に用意する
+      # （Dockerfile はバックエンドの生成を行わないため）。
       - name: Install sqlc
         uses: sqlc-dev/setup-sqlc@v4
         with:
@@ -92,24 +94,73 @@ jobs:
           PREVIEW_DATABASE_URL: ${{ secrets.PREVIEW_DATABASE_URL }}
         run: migrate -path backend/db/migrations -database "$PREVIEW_DATABASE_URL" up
 
+      - name: Build image
+        run: |
+          docker build -t preview-image .
+          docker save preview-image -o image.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preview-image
+          path: image.tar
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: preview-pr-${{ github.event.workflow_run.pull_requests[0].number }}-deploy
+      cancel-in-progress: true
+
+    permissions:
+      contents: read
+      id-token: write # Workload Identity Federation に必要
+      pull-requests: write # PR へのコメント
+      issues: write # PR のコメントは Issue のコメントとして扱われる
+
+    env:
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      # ジョブの env からはワークフローの env を参照できないため、リージョンを直接書く。
+      IMAGE: asia-northeast1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/fxgame-preview/app
+
+    # このジョブでは checkout しない。build ジョブから受け取るのはイメージの tar だけで、
+    # docker load で読み込んで push するだけ（中身はここでは実行しない）。
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: preview-image
+
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          # 本番用（GCP_SERVICE_ACCOUNT）とは別の、fxgame-preview だけを触れるアカウント。
+          service_account: ${{ vars.GCP_PREVIEW_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Push image
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker load -i image.tar
+          docker tag preview-image "$IMAGE:pr-$PR_NUMBER-$HEAD_SHA"
+          docker push "$IMAGE:pr-$PR_NUMBER-$HEAD_SHA"
+
       # --no-traffic: サービスの既定の URL には流さず、タグの URL でだけ開けるようにする。
+      # --service-account: PR のコードを、権限を何も持たない実行用アカウントで動かす
+      #   （既定の Compute Engine アカウントは roles/editor を持つため、毎回明示して固定する）。
       # 環境変数のフラグは付けない（fxgame-preview に手動で設定したものを引き継ぐ）。
       - name: Deploy preview revision
         run: |
-          gcloud run deploy "$SERVICE" --source . \
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE:pr-$PR_NUMBER-$HEAD_SHA" \
             --project "${{ vars.GCP_PROJECT_ID }}" \
             --region "$REGION" \
+            --service-account "${{ vars.GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT }}" \
             --no-traffic \
             --tag "pr-$PR_NUMBER" \
-            --allow-unauthenticated \
             --quiet
 
       - name: Get preview URL
@@ -160,7 +211,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          service_account: ${{ vars.GCP_PREVIEW_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v2
 

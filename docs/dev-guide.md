@@ -266,21 +266,57 @@ GET /interactions        -> 405
 
 PR ごとに、本番とは別のサービス `fxgame-preview` へトラフィックを流さないリビジョンを
 `pr-<番号>` タグで出し、その URL を PR にコメントする（`.github/workflows/preview.yml`）。
-**本番 DB・本番の秘密情報には触れない**よう、DB と環境変数は本番と分けてある。
 
 | 項目 | 値 |
 |---|---|
 | サービス名 / リージョン | `fxgame-preview` / `asia-northeast1` |
 | URL | `https://pr-<番号>---fxgame-preview-<ハッシュ>.asia-northeast1.run.app`（PR のコメントに出る） |
 | DB | Neon のプレビュー用ブランチ（全 PR で共有） |
+| イメージ | Artifact Registry の `fxgame-preview` リポジトリ |
+
+**PR のコードはマージ前のもの（/goal のエージェントが書いたものを含む）なので、本番の権限に触れさせない。**
+そのために次のように分けている。
+
+- イメージは GitHub Actions の中で、GCP の認証情報を持たないジョブがビルドする。
+  `gcloud run deploy --source` は使わない（Cloud Build が既定の Compute Engine アカウント＝
+  `roles/editor` で PR の Dockerfile を実行してしまうため）
+- デプロイは、`fxgame-preview` と専用のイメージ置き場だけを触れる専用アカウントで行う
+- プレビューの実行アカウントは、**権限を何も持たない**専用アカウントにする
+  （既定の Compute Engine アカウントで動かすと、PR のコードが `roles/editor` を得てしまう）
+- DB・Discord の値は本番と分ける（下記の環境変数）
 
 **準備（1 回だけ・ユーザーが行う）:**
 
-1. Neon で本番 DB から `preview` ブランチを作り、その接続 URL を控える
-2. `fxgame-preview` を 1 回手動で作る（`--no-traffic` は存在しないサービスには使えないため）。
-   環境変数は §2.1「手順」と同じ YAML 形式で、次のように本番と分けた値を渡す
+1. Neon で `preview` ブランチを作り、その接続 URL を控える。
+   本番から分岐すると実ユーザーのデータもコピーされる。気になる場合は、
+   スキーマだけのブランチ（Neon の schema-only branch）にする
+2. GCP に、プレビュー専用のアカウントとイメージ置き場を作る
+
+   ```bash
+   P=jyogi-fx; R=asia-northeast1
+   # 実行用（権限なし）とデプロイ用のアカウント
+   gcloud iam service-accounts create fxgame-preview-runtime --project $P
+   gcloud iam service-accounts create github-preview-deployer --project $P
+   RUNTIME=fxgame-preview-runtime@$P.iam.gserviceaccount.com
+   DEPLOYER=github-preview-deployer@$P.iam.gserviceaccount.com
+
+   # イメージ置き場（古いイメージを自動で消すポリシーは下の「無料枠」を参照）
+   gcloud artifacts repositories create fxgame-preview --repository-format=docker      --location $R --project $P
+   gcloud artifacts repositories add-iam-policy-binding fxgame-preview --location $R --project $P      --member serviceAccount:$DEPLOYER --role roles/artifactregistry.writer
+
+   # デプロイ用アカウントが、実行用アカウントを指定してデプロイできるようにする
+   gcloud iam service-accounts add-iam-policy-binding $RUNTIME --project $P      --member serviceAccount:$DEPLOYER --role roles/iam.serviceAccountUser
+
+   # GitHub Actions（main の文脈）からデプロイ用アカウントを使えるようにする。
+   # 本番の github-deployer に付けているものと同じ principalSet
+   gcloud iam service-accounts add-iam-policy-binding $DEPLOYER --project $P      --member "principalSet://iam.googleapis.com/projects/1046232958174/locations/global/workloadIdentityPools/github/attribute.repository/wasijyayo/jyogi_fx"      --role roles/iam.workloadIdentityUser
+   ```
+
+3. `fxgame-preview` を 1 回手動で作る（`--no-traffic` は存在しないサービスには使えないため）。
+   中身は Google のサンプルイメージでよい（最初の PR で置き換わる）。環境変数は本番と分けた値にする
 
    ```yaml
+   # 例: /tmp/cloudrun-preview-env.yaml（使用後は削除する）
    DATABASE_URL: <preview ブランチの URL>
    GAME_ALWAYS_OPEN: "true"            # 取引時間外でも画面を確認できるようにする
    DISCORD_CLIENT_ID: "..."            # 公開 ID なので本番と同じでよい（ログインは使えない。下記）
@@ -294,23 +330,37 @@ PR ごとに、本番とは別のサービス `fxgame-preview` へトラフィ�
    ```
 
    ```bash
-   gcloud run deploy fxgame-preview --source . --region asia-northeast1      --allow-unauthenticated --env-vars-file /tmp/cloudrun-preview-env.yaml
+   gcloud run deploy fxgame-preview --image us-docker.pkg.dev/cloudrun/container/hello      --region $R --project $P --service-account $RUNTIME      --allow-unauthenticated --env-vars-file /tmp/cloudrun-preview-env.yaml
+   # デプロイ用アカウントには、このサービスだけの権限を付ける
+   gcloud run services add-iam-policy-binding fxgame-preview --region $R --project $P      --member serviceAccount:$DEPLOYER --role roles/run.developer
    ```
 
-3. GitHub に登録する（Settings → Secrets and variables → Actions）
-   - Secret `PREVIEW_DATABASE_URL`: 手順 1 の URL（マイグレーションの適用に使う）
-   - Variable `PREVIEW_ENABLED`: `true`（未設定の間、ワークフローはスキップされる）
+4. GitHub に登録する（Settings → Secrets and variables → Actions）
+
+   | 種類 | 名前 | 値 |
+   |---|---|---|
+   | Secret | `PREVIEW_DATABASE_URL` | 手順 1 の URL（マイグレーションの適用に使う） |
+   | Variable | `GCP_PREVIEW_SERVICE_ACCOUNT` | `github-preview-deployer@jyogi-fx.iam.gserviceaccount.com` |
+   | Variable | `GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT` | `fxgame-preview-runtime@jyogi-fx.iam.gserviceaccount.com` |
+   | Variable | `PREVIEW_ENABLED` | `true`（未設定の間、ワークフローはスキップされる） |
 
 **制約:**
 
 - **Discord ログインは使えない。** Discord のリダイレクト URL は完全一致で登録する必要があり、
   PR ごとに変わる URL は登録できないため。ログイン不要の画面の確認が主な用途
 - tick が来ないので価格は動かない。プレビュー DB にあるデータがそのまま表示される
-- **プレビュー DB は全 PR で共有する。** PR のマイグレーションはデプロイ前に `migrate up` で
+- **プレビュー DB は全 PR で共有する。** PR のマイグレーションはビルド前に `migrate up` で
   適用される。マイグレーションを含む PR を閉じたら（マージしなかった場合は特に）、
   Neon で `preview` ブランチを親からリセットして戻す
+- ビルドのジョブ（PR のコードが動く）は、プレビュー DB の URL を持つ。
+  プレビュー DB は PR のコードに読み書きされうる前提で扱う
 - 同じリポジトリのブランチからの PR だけが対象（fork の PR は対象外）
 - PR が閉じるとタグが外れ、URL は開けなくなる
+
+**無料枠:** ビルドは GitHub Actions 上で行うので Cloud Build の時間は使わない。
+ただし PR への push ごとにイメージが Artifact Registry に溜まる（無料枠は 0.5 GB）。
+古いイメージを消すクリーンアップポリシーを `fxgame-preview` リポジトリに設定しておくこと
+（例: 最新 5 件を残して、7 日より古いものを削除）。
 
 ### ビルドログの確認
 
@@ -412,7 +462,8 @@ Attribute Conditionを設定すること）。
 
 ### `.github/workflows/preview.yml`（#109 DEPLOY-3）
 
-PR の `ci.yml` が成功した後に `workflow_run` で起動し、`fxgame-preview` に
+PR の `ci.yml` が成功した後に `workflow_run` で起動する。GCP の認証情報を持たない
+`build` ジョブがイメージを作り、`deploy` ジョブがそれを `fxgame-preview` に
 `--no-traffic --tag pr-<番号>` でデプロイして、タグの URL を PR にコメントする
 （2 回目以降の push では同じコメントを書き換える）。PR が閉じたら
 `pull_request_target` でタグを外す。どちらも `main` の文脈（`refs/heads/main`）で動くため、
