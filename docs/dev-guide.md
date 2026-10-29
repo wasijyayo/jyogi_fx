@@ -534,3 +534,65 @@ PR の `ci.yml` が成功した後に `workflow_run` で起動する。GCP の�
 deploy.yml と同じ Workload Identity の条件で認証できる。
 
 準備と制約は §2.1「プレビュー環境」を参照。
+
+### OpenCode + DeepSeek の PR レビュー（#117）
+
+`.github/workflows/opencode-review.yml`（名前: `OpenCode Review`）は、CodeRabbit と
+並行して日本語のレビューを PR にコメントする。既存の `CI` とは別ワークフローであり、
+Deploy/Preview が監視する `workflows: [CI]` には追加しない。必須チェックにも追加しない。
+指摘の有無はジョブの成否にしない。認証・API・利用上限・タイムアウト等の実行失敗は
+Actions に表示するが、既存 CI の結果を変更しない。
+
+#### 有効化と認証
+
+1. この変更を default ブランチへマージする（判断・マージはユーザーが行う）。
+2. GitHub の Settings → Secrets and variables → Actions → Secrets に
+   **`OPENCODE_GO_API_KEY`** を登録する。値は **OpenCode Go の API キー**。
+   DeepSeek 直接 API のキーや、ローカルの `auth.json` は使わない。
+3. 同一リポジトリの通常の PR を作成・更新し、Actions の `OpenCode Review` と
+   PR の専用コメントを確認する。再更新時には同じコメントが更新されることを確認する。
+
+モデルは既存設定と同じ `opencode-go/deepseek-v4-pro`、CLI は `opencode-ai@1.19.5` に固定。
+GitHub App のインストールや PAT は不要。GitHub 標準トークンの権限は
+`contents: read`・`pull-requests: read`・`issues: write` のみ。
+モデルを替える場合は `scripts/opencode-review.mjs` の `MODEL` とプロバイダー設定を
+一緒にレビューする。別プロバイダーへの自動フォールバックはしない。
+Secret の存在だけではモデルの契約・利用可能性までは検証できないため、初回の認証と
+実際のレビュー投稿は登録後に確認する。新しい課金契約を自動では行わない。
+
+#### 実行条件と停止
+
+- PR の作成・更新・再オープン・ready_for_review を対象とする。
+- ドラフト・fork・Dependabot・キー未登録は理由を Summary に表示してスキップする。
+- 止めるには Variables の `OPENCODE_REVIEW_DISABLED` を `true` にするか、Actions で
+  ワークフローを無効化する。再開は変数を削除/`false` にして PR を更新する。
+- 同じコミットを再実行する場合は Actions の Re-run jobs を使う。head/base が変わった
+  古い実行は投稿をスキップする。PR ごとに前の実行をキャンセルする。
+- 全体15分、モデル処理10分で打ち切る。OpenCode Go の利用量・上限・費用は契約先の
+  Console で確認する。料金をコードに固定値として記載しない。
+
+#### PR コードを実行しない構成
+
+`pull_request_target` を使うが、checkout は **PR の base.sha のみ**。
+head/merge ref のコード・テスト・設定・依存パッケージを実行しない。差分は GitHub API
+から文字列として取得する。PR がワークフローやスクリプトを書き換えても、その変更を
+この実行で実行することはない。そのため、この導入 PR 自体で新ワークフローの自動投稿を
+確認することはできず、default ブランチへ反映した後の PR で確認する。
+
+base の CLAUDE.md・AGENTS.md・設計/開発資料、PR の差分、PR 本文/タイトルから
+参照される同一リポジトリの Issue（最大5件、コメント込み）を渡す。
+変更ファイルの全文や全 Issue を検索するレビューではない。バイナリ等の差分未提供は
+コメントに未確認として記載し、全体35万文字超は途中で切らず失敗として報告する。
+`.env` 等の秘密ファイルは除外する。秘密情報を通常のソースへ書いてよいという意味ではない。
+
+CLI はリポジトリ外の空ディレクトリで起動し、全ツールと権限を deny に固定する。
+GitHub トークン・DB/GCP/Discord の認証情報はモデルプロセスへ渡さない。
+PR 内の命令や設定を実行せず、コード変更・push・マージは行わない。
+コメントは専用マーカー `<!-- jyogi-opencode-review:v1 -->` と投稿元 Bot で識別し、
+CodeRabbit や Preview のコメントを更新しない。本文にはモデルと対象 head/base SHA を記載する。
+
+検証用コマンド（DB・API キー不要）:
+
+```bash
+node --test scripts/opencode-review.test.mjs
+```
