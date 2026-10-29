@@ -21,12 +21,16 @@ describe('formatPrice', () => {
 });
 
 describe('formatChangePercent', () => {
-  it('プラス値は符号を付けて小数2桁で返す', () => {
-    expect(formatChangePercent('1.2345')).toBe('+1.23%');
+  it('プラス値は符号を付けて返す（小数2桁の文字列のまま）', () => {
+    expect(formatChangePercent('1.23')).toBe('+1.23%');
   });
 
-  it('マイナス値はそのまま小数2桁で返す', () => {
-    expect(formatChangePercent('-0.5')).toBe('-0.50%');
+  it('マイナス値はそのまま返す（小数2桁の文字列のまま）', () => {
+    expect(formatChangePercent('-0.50')).toBe('-0.50%');
+  });
+
+  it('ゼロは符号を付けて返す', () => {
+    expect(formatChangePercent('0.00')).toBe('+0.00%');
   });
 
   it('null（基準無し）はダッシュを返す', () => {

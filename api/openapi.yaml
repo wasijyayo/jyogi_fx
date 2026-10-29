@@ -128,7 +128,7 @@ components:
           type: string
           nullable: true
           description: 前日比（%）。「今日より前の直近セッションの最終close」が基準。
-            基準が無ければ null
+            小数2桁に丸めた文字列。基準が無ければ null
 
     MarketStatus:
       type: object

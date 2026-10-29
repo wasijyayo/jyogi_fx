@@ -254,8 +254,13 @@ func TestLogout(t *testing.T) {
 		t.Fatalf("seed session: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM sessions_auth WHERE id = $1`, sessionID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE discord_id = $1`, discordID)
+		cctx := context.Background()
+		if _, err := pool.Exec(cctx, `DELETE FROM sessions_auth WHERE id = $1`, sessionID); err != nil {
+			t.Errorf("cleanup: delete sessions_auth: %v", err)
+		}
+		if _, err := pool.Exec(cctx, `DELETE FROM users WHERE discord_id = $1`, discordID); err != nil {
+			t.Errorf("cleanup: delete users: %v", err)
+		}
 	})
 
 	mux := newMux(t, pool, game.RealClock{}, false)

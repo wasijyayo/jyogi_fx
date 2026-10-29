@@ -106,7 +106,8 @@ func currencySummaryToAPI(s game.CurrencySummary) apigen.CurrencySummary {
 		CurrentPrice: s.CurrentPrice.String(),
 	}
 	if s.DayChangePercent != nil {
-		v := s.DayChangePercent.String()
+		// 前日比は小数2桁の文字列で返す（丸めはサービス層で済んでいる。§5.2 float禁止）。
+		v := s.DayChangePercent.StringFixed(2)
 		out.DayChangePercent = &v
 	}
 	return out

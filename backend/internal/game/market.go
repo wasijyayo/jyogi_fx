@@ -88,7 +88,9 @@ func (s *QuoteService) summarize(ctx context.Context, q *db.Queries, now time.Ti
 	switch {
 	case err == nil:
 		if prev.IsPositive() {
-			pct := current.Sub(prev).Div(prev).Mul(decimal.NewFromInt(100))
+			// 前日比は小数2桁に丸めて返す（表示の丸めはサーバー側で行い、フロントで
+			// Number() に変換しない。CLAUDE.md §5.2）。
+			pct := current.Sub(prev).Div(prev).Mul(decimal.NewFromInt(100)).Round(2)
 			summary.DayChangePercent = &pct
 		}
 	case errors.Is(err, pgx.ErrNoRows):

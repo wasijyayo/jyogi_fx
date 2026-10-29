@@ -63,9 +63,15 @@ func TestGetCurrencySummary_前日比を算出する(t *testing.T) {
 	// price_ticks → game_sessions → currencies の順で削除する（外部キー依存）。
 	t.Cleanup(func() {
 		cctx := context.Background()
-		_, _ = pool.Exec(cctx, `DELETE FROM price_ticks WHERE currency_id = $1`, c.ID)
-		_, _ = pool.Exec(cctx, `DELETE FROM game_sessions WHERE id = $1`, session.ID)
-		_, _ = pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID)
+		if _, err := pool.Exec(cctx, `DELETE FROM price_ticks WHERE currency_id = $1`, c.ID); err != nil {
+			t.Errorf("cleanup: delete price_ticks: %v", err)
+		}
+		if _, err := pool.Exec(cctx, `DELETE FROM game_sessions WHERE id = $1`, session.ID); err != nil {
+			t.Errorf("cleanup: delete game_sessions: %v", err)
+		}
+		if _, err := pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID); err != nil {
+			t.Errorf("cleanup: delete currencies: %v", err)
+		}
 	})
 
 	now := time.Date(2099, 1, 2, 12, 0, 0, 0, jst) // 「今日」＝前日の翌日
@@ -82,7 +88,7 @@ func TestGetCurrencySummary_前日比を算出する(t *testing.T) {
 	if got.DayChangePercent == nil {
 		t.Fatal("DayChangePercent = nil, want 前日比が入る")
 	}
-	wantPct := wantCurrent.Sub(prevClose).Div(prevClose).Mul(decimal.NewFromInt(100))
+	wantPct := wantCurrent.Sub(prevClose).Div(prevClose).Mul(decimal.NewFromInt(100)).Round(2)
 	if !got.DayChangePercent.Equal(wantPct) {
 		t.Errorf("DayChangePercent = %s, want %s", got.DayChangePercent, wantPct)
 	}
@@ -98,8 +104,13 @@ func TestGetCurrencySummary_前日セッションが無ければ前日比はnil(
 	epoch := time.Date(2099, 1, 3, 12, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "MKTPCTNONE", 999802, epoch)
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM price_ticks WHERE currency_id = $1`, c.ID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM currencies WHERE id = $1`, c.ID)
+		cctx := context.Background()
+		if _, err := pool.Exec(cctx, `DELETE FROM price_ticks WHERE currency_id = $1`, c.ID); err != nil {
+			t.Errorf("cleanup: delete price_ticks: %v", err)
+		}
+		if _, err := pool.Exec(cctx, `DELETE FROM currencies WHERE id = $1`, c.ID); err != nil {
+			t.Errorf("cleanup: delete currencies: %v", err)
+		}
 	})
 
 	svc := NewQuoteService(pool, RealClock{})

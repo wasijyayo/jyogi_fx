@@ -11,13 +11,13 @@ export function formatPrice(value: string): string {
   return value.replace(/\.?0+$/, '');
 }
 
-// formatChangePercent は前日比（%）の文字列を符号付き・小数2桁で整形する。
+// formatChangePercent は前日比（%）の文字列に符号と % を付けるだけにする。
+// 値はサーバー側で小数2桁に丸めた文字列（例: "1.23" / "-0.50"）なので、
+// ここで数値に変換しない（CLAUDE.md §5.2 の float 禁止の趣旨）。
 // null（基準無し）は emダッシュにする。
 export function formatChangePercent(value: string | null): string {
   if (value == null) return '—';
-  const num = Number(value);
-  const rounded = num.toFixed(2);
-  return num > 0 ? `+${rounded}%` : `${rounded}%`;
+  return value.startsWith('-') ? `${value}%` : `+${value}%`;
 }
 
 // formatMarketStatus は取引時間の状態を表示用の文言にする。

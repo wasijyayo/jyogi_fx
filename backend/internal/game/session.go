@@ -107,9 +107,12 @@ func (cfg SessionConfig) MarketStatus(now time.Time) MarketStatus {
 		return MarketStatus{Open: true, RemainingMinutes: &remaining}
 	}
 
-	// 時間外。開始時刻は JST 12:00。13:00 以降なら翌日、12:00 より前なら当日。
+	// 時間外。開始時刻は sessionStartMinuteJST 定数から時・分を求める（12:00 を
+	// 二重定義しない）。終了後（13:00 以降）なら翌日、開始前なら当日。
 	jstNow := now.In(jst)
-	next := time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 12, 0, 0, 0, jst)
+	startHour := sessionStartMinuteJST / 60
+	startMinute := sessionStartMinuteJST % 60
+	next := time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), startHour, startMinute, 0, 0, jst)
 	if minuteOfDay >= sessionStartMinuteJST+sessionDurationMinutes {
 		next = next.AddDate(0, 0, 1)
 	}

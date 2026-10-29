@@ -52,3 +52,8 @@
   color: #1e6fd9;
   text-decoration: none;
 }
+
+.error {
+  color: #c62828;
+  font-size: 13px;
+}

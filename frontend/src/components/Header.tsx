@@ -66,6 +66,11 @@ export default function Header() {
             Discordでログイン
           </a>
         )}
+        {logoutMutation.isError && (
+          <span className={styles.error} role="alert">
+            ログアウトに失敗しました
+          </span>
+        )}
       </div>
     </header>
   );
