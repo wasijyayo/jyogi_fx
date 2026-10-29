@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"fxgame/backend/internal/db"
 	"fxgame/backend/internal/discord"
@@ -40,6 +41,8 @@ type Session struct {
 type User struct {
 	DiscordID   string
 	DisplayName string
+	// Balance は残高。金額は decimal（CLAUDE.md §5.2）。
+	Balance decimal.Decimal
 }
 
 // AuthService は Discord OAuth2 ログインとセッション発行を担当する。
@@ -165,7 +168,7 @@ func (s *AuthService) CurrentUser(ctx context.Context, sessionID string) (User, 
 		return User{}, ErrSessionInvalid
 	}
 
-	u, err := q.GetUserByID(ctx, session.UserID)
+	u, err := q.GetUser(ctx, session.UserID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return User{}, ErrSessionInvalid
@@ -173,7 +176,18 @@ func (s *AuthService) CurrentUser(ctx context.Context, sessionID string) (User, 
 		return User{}, fmt.Errorf("get user: %w", err)
 	}
 
-	return User{DiscordID: u.DiscordID, DisplayName: u.DisplayName}, nil
+	return User{DiscordID: u.DiscordID, DisplayName: u.DisplayName, Balance: u.Balance}, nil
+}
+
+// Logout はセッション行を削除する（POST /auth/logout。CLAUDE.md §5.4）。
+// Cookie の破棄は呼び出し側（server 層）が行う。セッションIDが既に無くても
+// エラーにはしない（冪等。ログアウトは何度呼んでも安全）。
+func (s *AuthService) Logout(ctx context.Context, sessionID string) error {
+	q := db.New(s.pool)
+	if err := q.DeleteSession(ctx, sessionID); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
 }
 
 func randomToken(n int) (string, error) {

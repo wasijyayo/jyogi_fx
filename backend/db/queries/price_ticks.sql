@@ -37,3 +37,16 @@ LIMIT $2;
 -- そのセッションの寄り付きキャンドル（本日の始値）を取得する。
 SELECT * FROM price_ticks
 WHERE session_id = $1 AND currency_id = $2 AND is_opening = TRUE;
+
+-- name: GetLastCloseBeforeDate :one
+-- 通貨一覧の「前日比」（#99 WEB-4）の基準値として、「今日より前の直近セッションの
+-- 最後の price_tick の close」を取得する。game_sessions.date が基準日より前である
+-- セッションに絞り、tick_index 降順の先頭（＝最後に保存されたtick）を取る。
+-- tick_index は通貨生成時点からの通算番号で単調増加のため、これが
+-- 「直近セッションの最終close」になる。行が無ければ呼び出し側で null（未定義）にする。
+SELECT pt.close
+FROM price_ticks pt
+JOIN game_sessions gs ON gs.id = pt.session_id
+WHERE pt.currency_id = $1 AND gs.date < $2
+ORDER BY pt.tick_index DESC
+LIMIT 1;

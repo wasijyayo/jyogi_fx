@@ -188,6 +188,7 @@ func runServe() error {
 		Quote:            quoteSvc,
 		Trade:            tradeSvc,
 		Claim:            claimSvc,
+		Session:          sessionSvc,
 		SecureCookies:    secureCookies,
 		DiscordPublicKey: discordPublicKey,
 		TickSharedSecret: tickSharedSecret,

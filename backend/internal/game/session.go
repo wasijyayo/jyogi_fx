@@ -77,6 +77,45 @@ func elapsedTicks(epochAt, now time.Time) int64 {
 	return int64(d / time.Minute)
 }
 
+// MarketStatus は SPA の共通ヘッダー（#99 WEB-4）に出す取引時間の状態。
+// 開催中なら残り時間を、時間外なら次の開始時刻を返す。いずれもサーバー側の
+// SessionConfig と Clock から計算し、ブラウザの時計では計算しない。
+type MarketStatus struct {
+	// Open は取引時間中（開催中）かどうか。
+	Open bool
+	// AlwaysOpen は GAME_ALWAYS_OPEN（開発モード。CLAUDE.md §5.1）が有効か。
+	// 有効な場合は「常に開催中」であり、残り時間・次の開始時刻の概念が無い。
+	AlwaysOpen bool
+	// RemainingMinutes は開催中の残り時間（分）。時間外・常時開催なら nil。
+	RemainingMinutes *int
+	// NextStartAt は時間外の場合の次の開始時刻（JST）。開催中・常時開催なら nil。
+	NextStartAt *time.Time
+}
+
+// MarketStatus は now（JST換算）時点の取引時間の状態を返す。
+//
+// GAME_ALWAYS_OPEN が有効な場合は常に Open=true・AlwaysOpen=true を返し、
+// RemainingMinutes / NextStartAt は nil にする（「常時開催」の表示に使う）。
+func (cfg SessionConfig) MarketStatus(now time.Time) MarketStatus {
+	if cfg.AlwaysOpen {
+		return MarketStatus{Open: true, AlwaysOpen: true}
+	}
+
+	minuteOfDay := minuteOfDayJST(now)
+	if minuteOfDay >= sessionStartMinuteJST && minuteOfDay < sessionStartMinuteJST+sessionDurationMinutes {
+		remaining := int(sessionDurationMinutes - (minuteOfDay - sessionStartMinuteJST))
+		return MarketStatus{Open: true, RemainingMinutes: &remaining}
+	}
+
+	// 時間外。開始時刻は JST 12:00。13:00 以降なら翌日、12:00 より前なら当日。
+	jstNow := now.In(jst)
+	next := time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 12, 0, 0, 0, jst)
+	if minuteOfDay >= sessionStartMinuteJST+sessionDurationMinutes {
+		next = next.AddDate(0, 0, 1)
+	}
+	return MarketStatus{NextStartAt: &next}
+}
+
 // SessionService は取引セッションの判定・寄り付き処理を担当する（#34 PRICE-3）。
 type SessionService struct {
 	pool *pgxpool.Pool
@@ -94,6 +133,9 @@ func NewSessionService(pool *pgxpool.Pool, clock Clock, cfg SessionConfig) *Sess
 
 func (s *SessionService) IsSessionOpen(now time.Time) bool     { return s.cfg.IsSessionOpen(now) }
 func (s *SessionService) IsNewOrderAllowed(now time.Time) bool { return s.cfg.IsNewOrderAllowed(now) }
+func (s *SessionService) MarketStatus(now time.Time) MarketStatus {
+	return s.cfg.MarketStatus(now)
+}
 
 // OpenSession は寄り付き処理（design.md §2.7「寄り付き処理の順序」）を実行する。
 //

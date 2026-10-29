@@ -1,0 +1,61 @@
+.main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.title {
+  font-size: 20px;
+}
+
+.loading {
+  padding: 16px;
+  color: #666;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 8px;
+  border-bottom: 1px solid #eee;
+  text-decoration: none;
+  color: inherit;
+}
+
+.item:hover {
+  background: #fafafa;
+}
+
+.symbol {
+  font-weight: 700;
+}
+
+.name {
+  color: #666;
+  font-size: 14px;
+}
+
+.price {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.change {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #555;
+}
+
+@media (max-width: 480px) {
+  .item {
+    grid-template-columns: 1fr 1fr;
+  }
+}
