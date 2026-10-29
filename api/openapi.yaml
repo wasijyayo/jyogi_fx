@@ -72,6 +72,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/currencies/{symbol}/candles:
+    get:
+      operationId: getCandles
+      summary: 通貨のローソク足（1分足/5分足）と発火済みイベント注釈を取得する
+      tags: [market]
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: resolution
+          in: query
+          required: true
+          description: 足の種類（1分足/5分足）
+          schema:
+            type: string
+            enum: [1m, 5m]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Candles"
+        "400":
+          description: resolution が 1m / 5m 以外
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 該当する通貨が存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/market/status:
     get:
       operationId: getMarketStatus
@@ -153,6 +191,78 @@ components:
           format: date-time
           nullable: true
           description: 時間外の場合の次の開始時刻（RFC3339）。開催中・常時開催なら null
+
+    Candles:
+      type: object
+      required:
+        - symbol
+        - resolution
+        - candles
+        - events
+      properties:
+        symbol:
+          type: string
+        resolution:
+          type: string
+          description: 足の種類（"1m" または "5m"）
+        candles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Candle"
+        events:
+          type: array
+          description: すでに発火したイベントのみ（未来のイベントは返さない）
+          items:
+            $ref: "#/components/schemas/ChartEvent"
+
+    Candle:
+      type: object
+      required:
+        - time
+        - open
+        - high
+        - low
+        - close
+        - basePrice
+        - isOpening
+      properties:
+        time:
+          type: string
+          format: date-time
+          description: この足の開始時刻（RFC3339）。1分足は ticked_at、5分足はバケット先頭
+        open:
+          type: string
+          description: 始値（decimal文字列。CLAUDE.md §5.2 float禁止）
+        high:
+          type: string
+        low:
+          type: string
+        close:
+          type: string
+        basePrice:
+          type: string
+          description: 人がいなかった場合の価格（decimal文字列。§3.4 の比較線）
+        isOpening:
+          type: boolean
+          description: 寄り付きキャンドルか
+
+    ChartEvent:
+      type: object
+      required:
+        - time
+        - type
+        - magnitude
+      properties:
+        time:
+          type: string
+          format: date-time
+          description: 発火時刻（RFC3339）
+        type:
+          type: string
+          description: イベント種別（shock / vol_up / liquidity_drain）
+        magnitude:
+          type: string
+          description: 効果の強さ（decimal文字列。shock は ±倍率、vol_up / liquidity_drain は倍率）
 
     Error:
       type: object

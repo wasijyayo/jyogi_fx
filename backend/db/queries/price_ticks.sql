@@ -38,6 +38,37 @@ LIMIT $2;
 SELECT * FROM price_ticks
 WHERE session_id = $1 AND currency_id = $2 AND is_opening = TRUE;
 
+-- name: ListPriceTicksBySession :many
+-- チャート（#45 WEB-1）の1分足用に、そのセッションの price_ticks を取得する
+-- （design.md §8「過去チャートの取得」ListPriceTicks そのもの。再現ロジック不要で
+-- SELECT するだけ）。tick_index 昇順（時系列順）で返す。
+SELECT * FROM price_ticks
+WHERE currency_id = $1 AND session_id = $2
+ORDER BY tick_index;
+
+-- name: ListFiveMinCandlesBySession :many
+-- チャート（#45 WEB-1）の5分足への集約（design.md §2.8 の集約クエリ）。
+-- bucket = tick_index / 5 で5tickずつまとめる。OHLC は §2.8 の定義どおり
+--   open  = バケット内最古 tick の open
+--   high  = MAX(high) / low = MIN(low)
+--   close = バケット内最新 tick の close
+-- 5分足ではヒゲが生じうる（§2.8/§3.5）。
+-- base_price（§3.4 の比較線）は close に合わせて最新 tick の値、
+-- time はバケット先頭 tick の ticked_at、is_opening は寄り付きを含むかで決める。
+SELECT
+    (tick_index / 5)::bigint                                      AS bucket,
+    MIN(ticked_at)::timestamptz                                   AS time,
+    (array_agg(open  ORDER BY tick_index))[1]::numeric            AS open,
+    MAX(high)::numeric                                            AS high,
+    MIN(low)::numeric                                             AS low,
+    (array_agg(close ORDER BY tick_index DESC))[1]::numeric       AS close,
+    (array_agg(base_price ORDER BY tick_index DESC))[1]::numeric  AS base_price,
+    bool_or(is_opening)                                           AS is_opening
+FROM price_ticks
+WHERE currency_id = $1 AND session_id = $2
+GROUP BY tick_index / 5
+ORDER BY bucket;
+
 -- name: GetLastCloseBeforeDate :one
 -- 通貨一覧の「前日比」（#99 WEB-4）の基準値として、「今日より前の直近セッションの
 -- 最後の price_tick の close」を取得する。game_sessions.date が基準日より前である

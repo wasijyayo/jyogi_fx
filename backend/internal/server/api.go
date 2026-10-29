@@ -85,6 +85,28 @@ func (s *apiServer) GetCurrency(w http.ResponseWriter, r *http.Request, symbol s
 	writeJSON(w, http.StatusOK, currencySummaryToAPI(summary))
 }
 
+// GetCandles は GET /api/currencies/{symbol}/candles。ログイン不要（公開）。
+// 足の種類（1分足/5分足）は resolution クエリパラメータで受ける（issue #45 指示）。
+func (s *apiServer) GetCandles(w http.ResponseWriter, r *http.Request, symbol string, params apigen.GetCandlesParams) {
+	if !params.Resolution.Valid() {
+		writeAPIError(w, http.StatusBadRequest, "invalid resolution")
+		return
+	}
+
+	result, err := s.quote.GetCandles(r.Context(), s.clock.Now(), symbol, string(params.Resolution))
+	if err != nil {
+		if errors.Is(err, game.ErrCurrencyNotFound) {
+			writeAPIError(w, http.StatusNotFound, "currency not found")
+			return
+		}
+		log.Printf("get candles: %v", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, candlesToAPI(result))
+}
+
 // GetMarketStatus は GET /api/market/status。取引時間の状態を返す。ログイン不要。
 // 時刻はサーバー側の Clock から取り、ブラウザの時計では計算しない（#99 指示）。
 func (s *apiServer) GetMarketStatus(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +139,36 @@ func currencySummariesToAPI(ss []game.CurrencySummary) []apigen.CurrencySummary 
 	out := make([]apigen.CurrencySummary, len(ss))
 	for i, s := range ss {
 		out[i] = currencySummaryToAPI(s)
+	}
+	return out
+}
+
+// candlesToAPI はサービス層のローソク足・イベントを API の型に変換する。
+// decimal は文字列に変換して返す（CLAUDE.md §5.2）。
+func candlesToAPI(r game.CandlesResult) apigen.Candles {
+	out := apigen.Candles{
+		Symbol:     r.Symbol,
+		Resolution: r.Resolution,
+		Candles:    make([]apigen.Candle, 0, len(r.Candles)),
+		Events:     make([]apigen.ChartEvent, 0, len(r.Events)),
+	}
+	for _, c := range r.Candles {
+		out.Candles = append(out.Candles, apigen.Candle{
+			Time:      c.Time,
+			Open:      c.Open.String(),
+			High:      c.High.String(),
+			Low:       c.Low.String(),
+			Close:     c.Close.String(),
+			BasePrice: c.BasePrice.String(),
+			IsOpening: c.IsOpening,
+		})
+	}
+	for _, e := range r.Events {
+		out.Events = append(out.Events, apigen.ChartEvent{
+			Time:      e.Time,
+			Type:      e.Type,
+			Magnitude: e.Magnitude.String(),
+		})
 	}
 	return out
 }
