@@ -6,6 +6,8 @@ import {
   formatJstTime,
   formatMarketStatus,
   formatPrice,
+  formatSide,
+  formatSignedPrice,
 } from './format';
 
 describe('formatPrice', () => {
@@ -78,5 +80,29 @@ describe('formatJstTime', () => {
   it('UTC の文字列も JST に変換する', () => {
     // UTC 03:00 = JST 12:00
     expect(formatJstTime('2026-01-01T03:00:00Z')).toBe('12:00');
+  });
+});
+
+describe('formatSignedPrice', () => {
+  it('正の値には + を付ける', () => {
+    expect(formatSignedPrice('50.00000000')).toBe('+50');
+  });
+
+  it('負の値は符号をそのまま返す', () => {
+    expect(formatSignedPrice('-12.34000000')).toBe('-12.34');
+  });
+
+  it('ゼロは符号を付けない', () => {
+    expect(formatSignedPrice('0.00000000')).toBe('0');
+  });
+});
+
+describe('formatSide', () => {
+  it('long は「買い」', () => {
+    expect(formatSide('long')).toBe('買い');
+  });
+
+  it('short は「売り」', () => {
+    expect(formatSide('short')).toBe('売り');
   });
 });

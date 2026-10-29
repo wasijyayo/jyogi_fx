@@ -62,6 +62,27 @@ func TestPlaceOrder_入力検証はDBに触る前に弾かれる(t *testing.T) {
 			mutate:  func(p PlaceOrderParams) PlaceOrderParams { p.Leverage = decimal.NewFromInt(-1); return p },
 			wantErr: ErrInvalidLeverage,
 		},
+		// 指数表記の巨大な値・極小の値は、ロック中に巨大な整数を作らないよう DB の前で弾く。
+		{
+			name:    "sizeが巨大な指数",
+			mutate:  func(p PlaceOrderParams) PlaceOrderParams { p.Size = decimal.RequireFromString("1e100000000"); return p },
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "sizeが極小の指数",
+			mutate:  func(p PlaceOrderParams) PlaceOrderParams { p.Size = decimal.RequireFromString("1e-100000000"); return p },
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "sizeが1兆以上",
+			mutate:  func(p PlaceOrderParams) PlaceOrderParams { p.Size = decimal.New(1, 12); return p },
+			wantErr: ErrInvalidSize,
+		},
+		{
+			name:    "leverageが指数の上限",
+			mutate:  func(p PlaceOrderParams) PlaceOrderParams { p.Leverage = decimal.RequireFromString("1e2147483647"); return p },
+			wantErr: ErrInvalidLeverage,
+		},
 	}
 
 	for _, tt := range tests {
@@ -71,6 +92,28 @@ func TestPlaceOrder_入力検証はDBに触る前に弾かれる(t *testing.T) {
 				t.Errorf("PlaceOrder error = %v, want %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestOrderValueInRange は数量・レバレッジの範囲チェックの境界を確認する。
+func TestOrderValueInRange(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"10", true},
+		{"0.5", true},
+		{"999999999999.99999999", true},
+		{"10.000000000", true}, // 末尾の 0 で指数が -9 になっても通す
+		{"1000000000000", false},
+		{"1e12", false},
+		{"1e13", false},
+		{"1e-19", false},
+	}
+	for _, tt := range tests {
+		if got := orderValueInRange(decimal.RequireFromString(tt.value)); got != tt.want {
+			t.Errorf("orderValueInRange(%s) = %v, want %v", tt.value, got, tt.want)
+		}
 	}
 }
 

@@ -9,22 +9,32 @@
   border-bottom: 1px solid #e2e2e2;
 }
 
-.nav {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-}
-
 .brand {
   font-weight: 700;
   font-size: 18px;
   text-decoration: none;
 }
 
+.left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .navLink {
-  color: #1e6fd9;
   font-size: 14px;
+  color: #333;
   text-decoration: none;
+}
+
+.navLink:hover {
+  color: #1e6fd9;
 }
 
 .right {

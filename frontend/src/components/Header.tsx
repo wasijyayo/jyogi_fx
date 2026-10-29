@@ -43,14 +43,22 @@ export default function Header() {
 
   return (
     <header className={styles.header}>
-      <nav className={styles.nav}>
+      <div className={styles.left}>
         <a className={styles.brand} href="/">
           fxgame
         </a>
-        <a className={styles.navLink} href="/demo">
-          デモ
-        </a>
-      </nav>
+        <nav className={styles.nav}>
+          <a href="/" className={styles.navLink}>
+            通貨
+          </a>
+          <a href="/trade" className={styles.navLink}>
+            取引
+          </a>
+          <a href="/demo" className={styles.navLink}>
+            デモ
+          </a>
+        </nav>
+      </div>
       <div className={styles.right}>
         {statusData && (
           <span className={styles.marketStatus}>{formatMarketStatus(statusData.data)}</span>

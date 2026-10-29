@@ -3,6 +3,7 @@ import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/re
 import Header from './components/Header';
 import CurrencyListPage from './pages/CurrencyListPage';
 import CurrencyPage from './pages/CurrencyPage';
+import TradePage from './pages/TradePage';
 import DemoPage from './demo/DemoPage';
 
 // RootLayout は全画面共通のレイアウト（ヘッダー + 中身）。CLAUDE.md §2 の TanStack Router。
@@ -29,6 +30,12 @@ export const currencyRoute = createRoute({
   component: CurrencyPage,
 });
 
+export const tradeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/trade',
+  component: TradePage,
+});
+
 // 発表用のデモ画面（#111）。サンプル相場とブラウザ内の状態だけで動き、API は呼ばない。
 const demoRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -36,7 +43,7 @@ const demoRoute = createRoute({
   component: DemoPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, demoRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute, demoRoute]);
 
 export const router = createRouter({ routeTree });
 
