@@ -1,0 +1,124 @@
+.section {
+  margin-bottom: 24px;
+}
+
+.heading {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.loading {
+  color: #666;
+  font-size: 14px;
+}
+
+.empty {
+  color: #666;
+  font-size: 14px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  padding: 12px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.symbol {
+  font-weight: 700;
+}
+
+.sideLong {
+  font-size: 12px;
+  color: #c62828;
+}
+
+.sideShort {
+  font-size: 12px;
+  color: #1e6fd9;
+}
+
+.size {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowDetail {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowFoot {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pnlProfit {
+  color: #1b7a43;
+  font-variant-numeric: tabular-nums;
+}
+
+.pnlLoss {
+  color: #c62828;
+  font-variant-numeric: tabular-nums;
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.confirmYes,
+.confirmNo,
+.close {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.confirmYes {
+  border: 1px solid #c62828;
+  background: #c62828;
+  color: #fff;
+}
+
+.confirmNo {
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #333;
+}
+
+.close {
+  border: 1px solid #c62828;
+  background: #fff;
+  color: #c62828;
+}
+
+.error {
+  color: #c62828;
+  font-size: 14px;
+}

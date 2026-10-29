@@ -16,6 +16,7 @@ type apiServer struct {
 	auth    *game.AuthService
 	quote   *game.QuoteService
 	session *game.SessionService
+	trade   *game.TradeService
 	clock   game.Clock
 }
 
@@ -26,26 +27,38 @@ func registerAPIRoutes(mux *http.ServeMux, cfg Config) {
 		auth:    cfg.Auth,
 		quote:   cfg.Quote,
 		session: cfg.Session,
+		trade:   cfg.Trade,
 		clock:   cfg.Clock,
 	}, mux)
 }
 
-// GetMe は GET /api/me。Cookie セッションからユーザーを特定して返す。
-func (s *apiServer) GetMe(w http.ResponseWriter, r *http.Request) {
+// currentUser は Cookie セッションからログイン中ユーザーを引く（GET /api/me・注文・
+// 建玉一覧・決済などのログイン必須エンドポイント共通の処理。CLAUDE.md §4 で同じロジックを
+// 二重実装しない）。未ログイン・セッション切れなら 401 を書いて ok=false を返す。
+func (s *apiServer) currentUser(w http.ResponseWriter, r *http.Request) (game.User, bool) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
 		writeAPIError(w, http.StatusUnauthorized, "not logged in")
-		return
+		return game.User{}, false
 	}
 
 	user, err := s.auth.CurrentUser(r.Context(), cookie.Value)
 	if err != nil {
 		if errors.Is(err, game.ErrSessionInvalid) {
 			writeAPIError(w, http.StatusUnauthorized, "not logged in")
-			return
+			return game.User{}, false
 		}
-		log.Printf("get me: %v", err)
+		log.Printf("current user: %v", err)
 		writeAPIError(w, http.StatusInternalServerError, "internal error")
+		return game.User{}, false
+	}
+	return user, true
+}
+
+// GetMe は GET /api/me。Cookie セッションからユーザーを特定して返す。
+func (s *apiServer) GetMe(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.currentUser(w, r)
+	if !ok {
 		return
 	}
 

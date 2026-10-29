@@ -123,6 +123,114 @@ paths:
               schema:
                 $ref: "#/components/schemas/MarketStatus"
 
+  /api/orders:
+    post:
+      operationId: placeOrder
+      summary: 成行の新規注文を発注する
+      tags: [trade]
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderRequest"
+      responses:
+        "200":
+          description: 注文成立
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResult"
+        "400":
+          description: 入力が不正（売買方向・数量・レバレッジ）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: 未ログイン（sessionCookieが無い・期限切れ）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 該当する通貨が存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 残高不足・レバレッジ超過・新規注文受付時間外
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/positions:
+    get:
+      operationId: listPositions
+      summary: ログイン中ユーザーの未決済ポジション一覧（含み損益込み）を取得する
+      tags: [trade]
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+        "401":
+          description: 未ログイン（sessionCookieが無い・期限切れ）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/positions/{positionId}/close:
+    post:
+      operationId: closePosition
+      summary: 既存ポジションを決済する
+      tags: [trade]
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: positionId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: 決済完了
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloseResult"
+        "401":
+          description: 未ログイン（sessionCookieが無い・期限切れ）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 該当するポジションが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: すでに決済済み
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -263,6 +371,101 @@ components:
         magnitude:
           type: string
           description: 効果の強さ（decimal文字列。shock は ±倍率、vol_up / liquidity_drain は倍率）
+
+    OrderRequest:
+      type: object
+      required:
+        - symbol
+        - side
+        - size
+        - leverage
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [long, short]
+        size:
+          type: string
+          description: 建玉数量（decimal文字列。CLAUDE.md §5.2 float禁止）
+        leverage:
+          type: string
+          description: レバレッジ（decimal文字列。CLAUDE.md §5.2 float禁止）
+
+    OrderResult:
+      type: object
+      required:
+        - symbol
+        - side
+        - size
+        - entryPrice
+        - leverage
+        - newBalance
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+        size:
+          type: string
+        entryPrice:
+          type: string
+          description: 約定価格（decimal文字列）
+        leverage:
+          type: string
+        newBalance:
+          type: string
+          description: 発注後の残高（decimal文字列）
+
+    Position:
+      type: object
+      required:
+        - id
+        - symbol
+        - side
+        - size
+        - entryPrice
+        - leverage
+        - currentPrice
+        - unrealizedPnl
+        - openedAt
+      properties:
+        id:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        side:
+          type: string
+        size:
+          type: string
+        entryPrice:
+          type: string
+          description: 建値（decimal文字列）
+        leverage:
+          type: string
+        currentPrice:
+          type: string
+          description: 現在価格（decimal文字列）
+        unrealizedPnl:
+          type: string
+          description: 含み損益（decimal文字列）
+        openedAt:
+          type: string
+          format: date-time
+
+    CloseResult:
+      type: object
+      required:
+        - pnl
+        - newBalance
+      properties:
+        pnl:
+          type: string
+          description: 確定損益（decimal文字列）
+        newBalance:
+          type: string
+          description: 決済後の残高（decimal文字列）
 
     Error:
       type: object

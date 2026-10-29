@@ -1,0 +1,115 @@
+.section {
+  margin-bottom: 24px;
+}
+
+.heading {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+.closedNotice {
+  padding: 10px 12px;
+  border: 1px solid #f0c36d;
+  border-radius: 6px;
+  background: #fef7e0;
+  color: #7a5c00;
+  font-size: 13px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-size: 13px;
+  color: #555;
+}
+
+.select,
+.input {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 15px;
+  background: #fff;
+}
+
+.select:disabled,
+.input:disabled {
+  background: #f0f0f0;
+  color: #999;
+}
+
+.sideToggle {
+  display: flex;
+  gap: 8px;
+}
+
+.side,
+.sideBuyActive,
+.sideSellActive {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 6px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.side {
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #333;
+}
+
+.sideBuyActive {
+  border: 1px solid #c62828;
+  background: #c62828;
+  color: #fff;
+}
+
+.sideSellActive {
+  border: 1px solid #1e6fd9;
+  background: #1e6fd9;
+  color: #fff;
+}
+
+.side:disabled,
+.sideBuyActive:disabled,
+.sideSellActive:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.submit {
+  padding: 10px 0;
+  border: none;
+  border-radius: 6px;
+  background: #26a69a;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.success {
+  color: #1b7a43;
+  font-size: 14px;
+}
+
+.error {
+  color: #c62828;
+  font-size: 14px;
+}

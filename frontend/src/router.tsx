@@ -3,6 +3,7 @@ import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/re
 import Header from './components/Header';
 import CurrencyListPage from './pages/CurrencyListPage';
 import CurrencyPage from './pages/CurrencyPage';
+import TradePage from './pages/TradePage';
 
 // RootLayout は全画面共通のレイアウト（ヘッダー + 中身）。CLAUDE.md §2 の TanStack Router。
 function RootLayout() {
@@ -28,7 +29,13 @@ export const currencyRoute = createRoute({
   component: CurrencyPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, currencyRoute]);
+export const tradeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/trade',
+  component: TradePage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute]);
 
 export const router = createRouter({ routeTree });
 

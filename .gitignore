@@ -36,3 +36,8 @@ frontend/src/api/generated/
 
 # scripts/start-issue.sh が worktree ごとに書く専用 DB の接続先（#93）
 .issue-db
+
+# Playwright（E2E）の成果物
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/

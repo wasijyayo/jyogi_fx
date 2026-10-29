@@ -1,0 +1,24 @@
+.main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.title {
+  font-size: 20px;
+  margin: 0 0 16px;
+}
+
+.loading {
+  padding: 16px;
+  color: #666;
+}
+
+.loginPrompt {
+  color: #555;
+}
+
+.loginLink {
+  color: #1e6fd9;
+  text-decoration: none;
+}

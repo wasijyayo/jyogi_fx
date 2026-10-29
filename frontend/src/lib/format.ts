@@ -44,3 +44,18 @@ export function formatJstTime(iso: string): string {
     hour12: false,
   }).format(new Date(iso));
 }
+
+// formatSignedPrice は損益（decimal文字列）に符号を付けて返す。formatPrice と同じく
+// 末尾の余分な0を落とし、正の値には「+」を付ける（含み損益・確定損益の表示用）。
+// ゼロは符号を付けず "0" にする（+0 / -0 を出さない）。
+export function formatSignedPrice(value: string): string {
+  const trimmed = formatPrice(value);
+  if (trimmed === '0' || trimmed === '-0') return '0';
+  return value.startsWith('-') ? trimmed : `+${trimmed}`;
+}
+
+// formatSide は売買方向（positions.side / trades.side の "long"/"short"）を
+// 表示用の日本語にする（design.md §8: side は long / short）。
+export function formatSide(side: string): string {
+  return side === 'short' ? '売り' : '買い';
+}
