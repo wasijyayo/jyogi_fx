@@ -262,6 +262,56 @@ GET /interactions        -> 405
 `/interactions` が **500** を返す場合は `DISCORD_PUBLIC_KEY` の設定漏れ
 （401 は正常な署名拒否なので、両者は意図的に区別してある）。
 
+### プレビュー環境（#109 DEPLOY-3）
+
+PR ごとに、本番とは別のサービス `fxgame-preview` へトラフィックを流さないリビジョンを
+`pr-<番号>` タグで出し、その URL を PR にコメントする（`.github/workflows/preview.yml`）。
+**本番 DB・本番の秘密情報には触れない**よう、DB と環境変数は本番と分けてある。
+
+| 項目 | 値 |
+|---|---|
+| サービス名 / リージョン | `fxgame-preview` / `asia-northeast1` |
+| URL | `https://pr-<番号>---fxgame-preview-<ハッシュ>.asia-northeast1.run.app`（PR のコメントに出る） |
+| DB | Neon のプレビュー用ブランチ（全 PR で共有） |
+
+**準備（1 回だけ・ユーザーが行う）:**
+
+1. Neon で本番 DB から `preview` ブランチを作り、その接続 URL を控える
+2. `fxgame-preview` を 1 回手動で作る（`--no-traffic` は存在しないサービスには使えないため）。
+   環境変数は §2.1「手順」と同じ YAML 形式で、次のように本番と分けた値を渡す
+
+   ```yaml
+   DATABASE_URL: <preview ブランチの URL>
+   GAME_ALWAYS_OPEN: "true"            # 取引時間外でも画面を確認できるようにする
+   DISCORD_CLIENT_ID: "..."            # 公開 ID なので本番と同じでよい（ログインは使えない。下記）
+   DISCORD_CLIENT_SECRET: dummy        # 以下は起動時の必須チェックを通すためのダミー
+   DISCORD_PUBLIC_KEY: <本番と同じ公開鍵>  # 形式チェックがあるため。公開鍵なので秘密ではない
+   DISCORD_BOT_TOKEN: dummy
+   DISCORD_REDIRECT_URI: https://example.invalid/auth/discord/callback
+   TICK_SHARED_SECRET: <ランダムな文字列>
+   DISCORD_TICKER_CHANNEL_ID: dummy
+   DISCORD_NOTIFY_CHANNEL_ID: dummy
+   ```
+
+   ```bash
+   gcloud run deploy fxgame-preview --source . --region asia-northeast1      --allow-unauthenticated --env-vars-file /tmp/cloudrun-preview-env.yaml
+   ```
+
+3. GitHub に登録する（Settings → Secrets and variables → Actions）
+   - Secret `PREVIEW_DATABASE_URL`: 手順 1 の URL（マイグレーションの適用に使う）
+   - Variable `PREVIEW_ENABLED`: `true`（未設定の間、ワークフローはスキップされる）
+
+**制約:**
+
+- **Discord ログインは使えない。** Discord のリダイレクト URL は完全一致で登録する必要があり、
+  PR ごとに変わる URL は登録できないため。ログイン不要の画面の確認が主な用途
+- tick が来ないので価格は動かない。プレビュー DB にあるデータがそのまま表示される
+- **プレビュー DB は全 PR で共有する。** PR のマイグレーションはデプロイ前に `migrate up` で
+  適用される。マイグレーションを含む PR を閉じたら（マージしなかった場合は特に）、
+  Neon で `preview` ブランチを親からリセットして戻す
+- 同じリポジトリのブランチからの PR だけが対象（fork の PR は対象外）
+- PR が閉じるとタグが外れ、URL は開けなくなる
+
 ### ビルドログの確認
 
 ```bash
@@ -359,3 +409,13 @@ Attribute Conditionを設定すること）。
 **有効化する前に必ず確認すること**: §2.1に書いたとおり、`DISCORD_TICKER_CHANNEL_ID`・
 `DISCORD_NOTIFY_CHANNEL_ID`が本番Cloud Runにまだ設定されていない場合、自動デプロイで
 サービスが起動しなくなる。
+
+### `.github/workflows/preview.yml`（#109 DEPLOY-3）
+
+PR の `ci.yml` が成功した後に `workflow_run` で起動し、`fxgame-preview` に
+`--no-traffic --tag pr-<番号>` でデプロイして、タグの URL を PR にコメントする
+（2 回目以降の push では同じコメントを書き換える）。PR が閉じたら
+`pull_request_target` でタグを外す。どちらも `main` の文脈（`refs/heads/main`）で動くため、
+deploy.yml と同じ Workload Identity の条件で認証できる。
+
+準備と制約は §2.1「プレビュー環境」を参照。
