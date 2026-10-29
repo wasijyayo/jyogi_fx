@@ -377,6 +377,66 @@ gcloud builds log <BUILD_ID> --region=asia-northeast1
 
 ---
 
+## 2.2 過去レートの取り込み（#102 REPLAY-2）
+
+過去チャートモード（`docs/design.md` §13）で使う実レート（EV Trading Labs の日足 D1）を
+DB に取り込む手動バッチ。**リクエストのたびに外部へ取りに行かない**（CLAUDE.md §1）ため、
+ダウンロードした `.json.gz` ファイルを引数で渡して実行する。取り込みの本体は
+`internal/game.RateImportService`、エントリポイントは `cmd/app` の `import-rates` サブコマンド。
+
+### ダウンロード
+
+- 配布ページ: https://evtradelabs.com/data
+- 対象: **USD/JPY・EUR/USD・GBP/USD・AUD/USD の 4 ペア、2015 年以降**（USD/JPY・AUD/USD の
+  収録が 2015 年から。4 ペアをそろえるため 2015 年以降を使う）。**2015 年より前のファイルは
+  取り込まない**（取り込み側では年を判定しないので、対象を選ぶのは運用側の責任）。
+- ファイルは**通貨ペア・年ごとに 1 つ**（例: USD/JPY の 2015 年は `2015.json.gz`）。
+  ファイル名にも中身にも通貨ペアの情報が無いので、取り込み時に `--pair` で指定する。
+- 確定した年（今年以外）の D1 は登録不要でダウンロードできる。
+- 利用条件（2026-10-30 確認）: 「License: free use with attribution to EV Trading Labs」
+  「Educational use only. No accuracy guarantee. Use at your own risk.」。
+  画面に「出典: EV Trading Labs」を表示する（#105）。
+- ダウンロードしたファイルは**リポジトリにコミットしない**。
+
+### コマンド
+
+```bash
+cd backend
+go run ./cmd/app import-rates --pair USD/JPY --fetched-on 2026-10-30 \
+  <ファイル1.json.gz> <ファイル2.json.gz> ...
+```
+
+- `--pair`: 必須。`currency_pairs.symbol`（例: `USD/JPY`）。テーブルに無いペアはエラー。
+- `--fetched-on`: 必須。取得日（`YYYY-MM-DD`）。
+- 1 ファイルを 1 トランザクションで取り込む。途中でエラーになればそのファイルは何も入らない。
+- 土曜・日曜の行は保存しない。無い平日は補わない。取り込み済みのレートは上書きしない。
+- ファイルごとに「入れた件数・週末で飛ばした件数・既にあった件数」を表示する。
+- DB の接続先は serve と同じ決め方（`DATABASE_URL` → `LOCAL_DATABASE_URL`）。
+
+**再実行してよい。** 同じ通貨ペア・同じ内容（SHA-256）のファイルは同じデータセットとして
+扱われるため、同じファイルを何度実行しても行が増えない（冪等）。値を直す必要がある場合は
+新しいデータセットとして取り込む（古いレートは上書きされない）。
+
+### 本番 DB への取り込み（実行はユーザーの作業）
+
+本番（Neon）への取り込みは、**ユーザーが手動で**行う。`.env` を丸ごと読まず、
+`DATABASE_URL` を明示して実行する（`.env` の `DATABASE_URL` は本番を指すため、
+うっかり `source .env` して誤接続しないこと）。
+
+```bash
+cd backend
+DATABASE_URL='postgres://...（本番 Neon の接続 URL）...' \
+  go run ./cmd/app import-rates --pair USD/JPY --fetched-on 2026-10-30 \
+  <ファイル1.json.gz> <ファイル2.json.gz> ...
+```
+
+- 4 ペア × 2015 年以降の全ファイル分を、ペアごとに `--pair` を変えて実行する。
+- マイグレーション（`000009_historical_rates`）は事前に適用しておく（§2 の `migrate-up`）。
+  本番へのマイグレーション適用は人間が手動で行う（AGENTS.md）。
+- 取り込み後の画面表示（出典表示・チャート）は #105 で実装する。
+
+---
+
 ## 3. Go 実装の約束
 
 - 全ての関数の第 1 引数は `ctx context.Context`

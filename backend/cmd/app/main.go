@@ -4,11 +4,14 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -20,7 +23,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: app <serve|register-commands>")
+		fmt.Fprintln(os.Stderr, "usage: app <serve|register-commands|import-rates>")
 		os.Exit(1)
 	}
 
@@ -31,6 +34,10 @@ func main() {
 		}
 	case "register-commands":
 		if err := runRegisterCommands(); err != nil {
+			log.Fatal(err)
+		}
+	case "import-rates":
+		if err := runImportRates(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 	default:
@@ -267,5 +274,71 @@ func runRegisterCommands() error {
 		scope = "guild " + guildID + "（即時反映）"
 	}
 	log.Printf("registered %d commands (%s)", len(discord.Commands), scope)
+	return nil
+}
+
+// runImportRates は過去チャートモード用の実レート（EV Trading Labs の日足）を
+// DB に取り込む手動バッチ（#102 REPLAY-2）。リクエストのたびに外部へ取りに行かない
+// （CLAUDE.md §1）ため、ダウンロードした .json.gz ファイルを引数で渡して実行する。
+//
+//	app import-rates --pair USD/JPY --fetched-on 2026-10-30 2015.json.gz 2016.json.gz
+//
+// 取り込み処理の本体は internal/game.RateImportService。ここはフラグの解析と
+// ファイルのオープン、呼び出しだけを行う。
+func runImportRates(args []string) error {
+	fs := flag.NewFlagSet("import-rates", flag.ContinueOnError)
+	pair := fs.String("pair", "", "通貨ペア（例: USD/JPY）。currency_pairs に無いペアはエラー")
+	fetchedOn := fs.String("fetched-on", "", "取得日（YYYY-MM-DD）")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *pair == "" {
+		return fmt.Errorf("--pair is required")
+	}
+	if *fetchedOn == "" {
+		return fmt.Errorf("--fetched-on is required")
+	}
+	fetched, err := time.Parse("2006-01-02", *fetchedOn)
+	if err != nil {
+		return fmt.Errorf("--fetched-on: %w", err)
+	}
+	files := fs.Args()
+	if len(files) == 0 {
+		return fmt.Errorf("少なくとも1つの .json.gz ファイルを指定してください")
+	}
+
+	// DB の接続先は serve と同じ決め方（DATABASE_URL → LOCAL_DATABASE_URL）。
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("LOCAL_DATABASE_URL")
+	}
+	if dsn == "" {
+		return fmt.Errorf("DATABASE_URL (or LOCAL_DATABASE_URL) is not set")
+	}
+
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		return fmt.Errorf("connect to db: %w", err)
+	}
+	defer pool.Close()
+
+	svc := game.NewRateImportService(pool, game.RealClock{})
+
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		res, importErr := svc.ImportFile(context.Background(), *pair, fetched, filepath.Base(path), f)
+		closeErr := f.Close()
+		if importErr != nil {
+			return fmt.Errorf("import %s: %w", path, importErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close %s: %w", path, closeErr)
+		}
+		log.Printf("%s: 入れた件数=%d 週末で飛ばした件数=%d 既にあった件数=%d",
+			path, res.Inserted, res.SkippedWeekend, res.AlreadyExisted)
+	}
 	return nil
 }
