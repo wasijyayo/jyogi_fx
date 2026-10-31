@@ -61,7 +61,7 @@ var replayCleanupOrder = []string{
 	`DELETE FROM replay_positions`,
 	`DELETE FROM replay_leverage_unlocks`,
 	`DELETE FROM replay_speed_changes`,
-	`DELETE FROM replay_game_datasets`,
+	`DELETE FROM replay_game_rates`,
 	`DELETE FROM replay_game_days`,
 	`DELETE FROM replay_games`,
 	`DELETE FROM daily_rates`,
@@ -132,6 +132,55 @@ func pairBySymbol(t *testing.T, pairs []db.CurrencyPair, symbol string) db.Curre
 	}
 	t.Fatalf("pair %s not found", symbol)
 	return db.CurrencyPair{}
+}
+
+// replaySetupCleanup は replay 系・レート系・非シード通貨ペアを先に掃除し、t.Cleanup で
+// 後始末（子テーブルから順に削除、失敗は t.Errorf）を登録する。
+func replaySetupCleanup(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	pre := append([]string{}, replayCleanupOrder...)
+	pre = append(pre, `DELETE FROM currency_pairs WHERE symbol NOT IN ('USD/JPY','EUR/USD','GBP/USD','AUD/USD')`)
+	for _, s := range pre {
+		if _, err := pool.Exec(ctx, s); err != nil {
+			t.Fatalf("pre-cleanup %q: %v", s, err)
+		}
+	}
+	t.Cleanup(func() {
+		cctx := context.Background()
+		for _, s := range replayCleanupOrder {
+			if _, err := pool.Exec(cctx, s); err != nil {
+				t.Errorf("cleanup %q: %v", s, err)
+			}
+		}
+	})
+}
+
+// insertDataset は通貨ペアに 1 データセットと日足を投入し、データセット ID を返す。
+func insertDataset(t *testing.T, ctx context.Context, pool *pgxpool.Pool, p db.CurrencyPair, shaSuffix string, importedAt time.Time, dates []time.Time, bar ohlcBar) int64 {
+	t.Helper()
+	var datasetID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO rate_datasets (pair_id, source, filename, fetched_on, sha256, imported_at)
+		VALUES ($1, 'test', 'test.json.gz', $2, $3, $4) RETURNING id`,
+		p.ID,
+		pgtype.Date{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true},
+		shaSuffix,
+		pgtype.Timestamptz{Time: importedAt, Valid: true},
+	).Scan(&datasetID); err != nil {
+		t.Fatalf("insert dataset: %v", err)
+	}
+	for i, d := range dates {
+		o, h, l, c := bar(p.Symbol, i)
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO daily_rates (dataset_id, pair_id, date, open, high, low, close)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			datasetID, p.ID, pgtype.Date{Time: d, Valid: true}, o, h, l, c,
+		); err != nil {
+			t.Fatalf("insert daily rate: %v", err)
+		}
+	}
+	return datasetID
 }
 
 // newReplayServiceForTest は固定シードの乱数と時計を持ったサービスを作る。
@@ -747,5 +796,146 @@ func TestReplay_DoesNotAffectUsersBalance(t *testing.T) {
 	}
 	if !balance.Equal(dec(wantBalance)) {
 		t.Errorf("users.balance = %s, want %s (must not change)", balance, wantBalance)
+	}
+}
+
+// TestReplay_IntervalAcrossDatasets は、1 ペアに複数のデータセット（年ごと）があるとき、
+// 各日付で imported_at が最新のデータセットの値を使い、年をまたぐ区間も選べることを確認する
+// （#103 レビュー対応）。旧実装はペアごとに最新 1 件だけを使うため、2015 年分が失われて
+// 区間を選べなかった。
+func TestReplay_IntervalAcrossDatasets(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	// 2015-11-02（月）から 80 営業日（2015 → 2016 をまたぐ）。
+	allDates := replayTestDates(time.Date(2015, 11, 2, 0, 0, 0, 0, time.UTC), 80)
+	// 2016 年になる最初の index。それより前が 2015 年。
+	splitIdx := 0
+	for i, d := range allDates {
+		if d.Year() == 2016 {
+			splitIdx = i
+			break
+		}
+	}
+	if splitIdx == 0 || splitIdx >= 80 {
+		t.Fatalf("unexpected year split: %d", splitIdx)
+	}
+
+	replaySetupCleanup(t, pool)
+	pairs := seededPairs(t, ctx, pool)
+	for _, p := range pairs {
+		// 2015 年分（close=100）と 2016 年分（close=200）を別データセットで投入。
+		insertDataset(t, ctx, pool, p, "years-2015-"+p.Symbol,
+			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), allDates[:splitIdx], constantBar("100", "101", "99", "100"))
+		insertDataset(t, ctx, pool, p, "years-2016-"+p.Symbol,
+			time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), allDates[splitIdx:], constantBar("200", "201", "199", "200"))
+	}
+
+	clock := &replayTestClock{now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}
+	svc := newReplayServiceForTest(pool, clock)
+
+	res, err := svc.StartGame(ctx, "", "tester")
+	if err != nil {
+		t.Fatalf("StartGame: %v", err)
+	}
+	if res.StartYear != 2015 {
+		t.Errorf("startYear = %d, want 2015", res.StartYear)
+	}
+	// 開始前 20 日（2015 年）は close=100。
+	for _, pc := range res.Candles {
+		if len(pc.Candles) != 20 {
+			t.Fatalf("pre candles = %d, want 20", len(pc.Candles))
+		}
+		for _, c := range pc.Candles {
+			if !c.Close.Equal(dec("100")) {
+				t.Errorf("pre candle day %d close = %s, want 100", c.Day, c.Close)
+			}
+		}
+	}
+
+	// 終了まで進め、2016 年の日足（close=200）が使われていることを確認する。
+	clock.now = clock.now.Add(180 * time.Second)
+	state, err := svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState(final): %v", err)
+	}
+	if state.Status != replayStatusFinished {
+		t.Fatalf("status = %s, want finished", state.Status)
+	}
+	for _, pc := range state.Candles {
+		for _, c := range pc.Candles {
+			want := dec("100")
+			if c.Day >= splitIdx {
+				want = dec("200")
+			}
+			if !c.Close.Equal(want) {
+				t.Errorf("final candle day %d close = %s, want %s", c.Day, c.Close, want)
+			}
+		}
+	}
+	// 区間が年をまたいでいる（開始 2015 → 終了 2016）。
+	if state.IntervalStart == nil || state.IntervalStart.Year() != 2015 {
+		t.Errorf("intervalStart = %v, want 2015", state.IntervalStart)
+	}
+	if state.IntervalEnd == nil || state.IntervalEnd.Year() != 2016 {
+		t.Errorf("intervalEnd = %v, want 2016", state.IntervalEnd)
+	}
+}
+
+// TestReplay_NewDatasetDoesNotChangeExistingGame は、同じ日付に新しいデータセットを追加しても、
+// 既存のゲームの値（開始時に記録した日足）が変わらないことを確認する（#103 レビュー対応）。
+func TestReplay_NewDatasetDoesNotChangeExistingGame(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	dates := replayTestDates(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
+
+	replaySetupCleanup(t, pool)
+	pairs := seededPairs(t, ctx, pool)
+	for _, p := range pairs {
+		// 既存データセット（close=100）。
+		insertDataset(t, ctx, pool, p, "old-"+p.Symbol,
+			time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), dates, constantBar("100", "101", "99", "100"))
+	}
+
+	clock := &replayTestClock{now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}
+	svc := newReplayServiceForTest(pool, clock)
+
+	res, err := svc.StartGame(ctx, "", "tester")
+	if err != nil {
+		t.Fatalf("StartGame: %v", err)
+	}
+	// 開始直後の約定価格は 100。
+	usd := pairBySymbol(t, pairs, "USD/JPY")
+	ord, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: usd.ID, Side: SideLong, Margin: dec("10"), Leverage: dec("1"),
+	})
+	if err != nil {
+		t.Fatalf("place order: %v", err)
+	}
+	if !ord.Position.EntryPrice.Equal(dec("100")) {
+		t.Fatalf("entry price before = %s, want 100", ord.Position.EntryPrice)
+	}
+
+	// 同じ日付に新しいデータセット（close=200、imported_at が新しい）を追加。
+	for _, p := range pairs {
+		insertDataset(t, ctx, pool, p, "new-"+p.Symbol,
+			time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), dates, constantBar("200", "201", "199", "200"))
+	}
+
+	// ゲームの値（開始時に記録した日足）は変わらず 100 のまま。
+	clock.now = clock.now.Add(3 * time.Second)
+	state, err := svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	for _, pc := range state.Candles {
+		for _, c := range pc.Candles {
+			if !c.Close.Equal(dec("100")) {
+				t.Errorf("candle day %d close = %s, want 100 (must not change)", c.Day, c.Close)
+			}
+		}
 	}
 }

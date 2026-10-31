@@ -91,7 +91,7 @@ type ReplayService struct {
 	pool  *pgxpool.Pool
 	clock Clock
 	// mu は rng を同時アクセスから守る（rand.Rand はスレッドセーフでない）。
-	mu  sync.Mutex
+	mu sync.Mutex
 	// rng は区間選びの乱数源。テストでは固定シードで差し替えて区間を固定できる。
 	rng *rand.Rand
 }
@@ -168,7 +168,7 @@ func replayLiquidationLine(side Side, entryPrice, margin, notional decimal.Decim
 }
 
 // replayPnL は指定価格での損益 = 取引規模 × 価格の変化率（design.md §13）。
-// long: notional × (price/entry − 1)、short: notional × (entry/price − 1)。
+// long: notional × (price − entry)/entry、short: notional × (entry − price)/entry。
 func replayPnL(side Side, entryPrice, price, notional decimal.Decimal) decimal.Decimal {
 	rate := price.Sub(entryPrice).Div(entryPrice)
 	if side == SideShort {
@@ -335,13 +335,24 @@ type ReplayStartResult struct {
 	Candles       []ReplayPairCandles
 }
 
-// replayCtx はゲーム処理で共通に使う派生データ（通貨ペア・日付・データセットの対応）。
+// replayCtx はゲーム処理で共通に使う派生データ（通貨ペア・日付・日足の対応）。
 type replayCtx struct {
-	pairs         []db.CurrencyPair
-	pairByID      map[int64]db.CurrencyPair
-	days          []db.ReplayGameDay
-	dayByIndex    map[int32]time.Time
-	datasetByPair map[int64]int64
+	pairs    []db.CurrencyPair
+	pairByID map[int64]db.CurrencyPair
+	days     []db.ReplayGameDay
+	// ratesByPair はゲーム開始時に記録した日足（pair_id → day_index → daily_rates の行）。
+	// 後からデータセットが増えても値が変わらないよう、以降はこれだけを読む。
+	ratesByPair map[int64]map[int32]db.DailyRate
+}
+
+// rate は pairID・dayIndex の日足を返す（無ければ ok=false）。
+func (c *replayCtx) rate(pairID int64, dayIndex int32) (db.DailyRate, bool) {
+	byDay, ok := c.ratesByPair[pairID]
+	if !ok {
+		return db.DailyRate{}, false
+	}
+	r, ok := byDay[dayIndex]
+	return r, ok
 }
 
 // loadReplayCtx はゲームの派生データを読み込む。
@@ -355,30 +366,39 @@ func loadReplayCtx(ctx context.Context, q *db.Queries, gameID int64) (*replayCtx
 		pairByID[p.ID] = p
 	}
 
-	datasets, err := q.ListReplayGameDatasets(ctx, gameID)
+	rates, err := q.ListReplayGameRates(ctx, gameID)
 	if err != nil {
-		return nil, fmt.Errorf("list game datasets: %w", err)
+		return nil, fmt.Errorf("list game rates: %w", err)
 	}
-	datasetByPair := make(map[int64]int64, len(datasets))
-	for _, d := range datasets {
-		datasetByPair[d.PairID] = d.DatasetID
+	ratesByPair := make(map[int64]map[int32]db.DailyRate, len(pairs))
+	for _, r := range rates {
+		byDay, ok := ratesByPair[r.PairID]
+		if !ok {
+			byDay = make(map[int32]db.DailyRate)
+			ratesByPair[r.PairID] = byDay
+		}
+		byDay[r.DayIndex] = db.DailyRate{
+			ID:        r.ID,
+			DatasetID: r.DatasetID,
+			PairID:    r.PairID,
+			Date:      r.Date,
+			Open:      r.Open,
+			High:      r.High,
+			Low:       r.Low,
+			Close:     r.Close,
+		}
 	}
 
 	days, err := q.ListReplayGameDays(ctx, gameID)
 	if err != nil {
 		return nil, fmt.Errorf("list game days: %w", err)
 	}
-	dayByIndex := make(map[int32]time.Time, len(days))
-	for _, d := range days {
-		dayByIndex[d.DayIndex] = d.Date.Time
-	}
 
 	return &replayCtx{
-		pairs:         pairs,
-		pairByID:      pairByID,
-		days:          days,
-		dayByIndex:    dayByIndex,
-		datasetByPair: datasetByPair,
+		pairs:       pairs,
+		pairByID:    pairByID,
+		days:        days,
+		ratesByPair: ratesByPair,
 	}, nil
 }
 
@@ -431,7 +451,7 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := db.New(tx)
 
-	pairs, datasets, days, err := s.selectInterval(ctx, q, now)
+	pairs, ratesByDate, days, err := s.selectInterval(ctx, q, now)
 	if err != nil {
 		return ReplayStartResult{}, err
 	}
@@ -457,14 +477,29 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 			return ReplayStartResult{}, fmt.Errorf("create replay game day: %w", err)
 		}
 	}
-	for pairID, datasetID := range datasets {
-		if err := q.CreateReplayGameDataset(ctx, db.CreateReplayGameDatasetParams{
-			GameID:    game.ID,
-			PairID:    pairID,
-			DatasetID: datasetID,
-		}); err != nil {
-			return ReplayStartResult{}, fmt.Errorf("create replay game dataset: %w", err)
+
+	// 80 日 × 全ペアの日足の行を開始時に記録する。以降の約定・強制決済・状態取得は
+	// この行（daily_rate_id）経由で読むため、後からデータセットが増えても値が変わらない。
+	ratesByPair := make(map[int64]map[int32]db.DailyRate, len(pairs))
+	for _, p := range pairs {
+		byDate := ratesByDate[p.ID]
+		byDay := make(map[int32]db.DailyRate, len(days))
+		for i, date := range days {
+			r, ok := byDate[date.Format("2006-01-02")]
+			if !ok {
+				return ReplayStartResult{}, fmt.Errorf("effective daily rate missing for %s on %s", p.Symbol, date.Format("2006-01-02"))
+			}
+			if err := q.CreateReplayGameRate(ctx, db.CreateReplayGameRateParams{
+				GameID:      game.ID,
+				PairID:      p.ID,
+				DayIndex:    int32(i),
+				DailyRateID: r.ID,
+			}); err != nil {
+				return ReplayStartResult{}, fmt.Errorf("create replay game rate: %w", err)
+			}
+			byDay[int32(i)] = r
 		}
+		ratesByPair[p.ID] = byDay
 	}
 
 	// 開始時のレスポンス（開始前 20 日の日足を含む）。
@@ -479,10 +514,7 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		})
 	}
 
-	candles, err := s.buildCandles(ctx, q, datasets, days, 0, replayPreDays-1, false)
-	if err != nil {
-		return ReplayStartResult{}, err
-	}
+	candles := buildReplayCandles(pairs, ratesByPair, days, 0, replayPreDays-1, false)
 
 	if err := tx.Commit(ctx); err != nil {
 		return ReplayStartResult{}, fmt.Errorf("commit tx: %w", err)
@@ -502,10 +534,13 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 
 // selectInterval は区間（開始前 20 日 + 区間 60 日の計 80 営業日）を選ぶ。
 // 対象は currency_pairs の全行（コードにペアを書かない。CLAUDE.md §5.3）。各ペアについて
-// ゲーム開始時点で一番新しく取り込まれたデータセットを使い、全ペアに値がある共通営業日を
+// 日付ごとに imported_at が最新のデータセットの日足を選び、全ペアに値がある共通営業日を
 // 日付順に並べ、連続する 80 日をランダムに選ぶ。区間の最終日は 2015-01-01 以降かつ
 // 今日から 60 営業日以上前（design.md §13「対象と期間」）。
-func (s *ReplayService) selectInterval(ctx context.Context, q *db.Queries, now time.Time) ([]db.CurrencyPair, map[int64]int64, []time.Time, error) {
+//
+// 戻り値の ratesByDate は pair_id → 日付（"2006-01-02"）→ その日付で使う日足（daily_rates の行）。
+// 開始時に replay_game_rates として記録する。
+func (s *ReplayService) selectInterval(ctx context.Context, q *db.Queries, now time.Time) ([]db.CurrencyPair, map[int64]map[string]db.DailyRate, []time.Time, error) {
 	pairs, err := q.ListCurrencyPairs(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("list currency pairs: %w", err)
@@ -514,26 +549,22 @@ func (s *ReplayService) selectInterval(ctx context.Context, q *db.Queries, now t
 		return nil, nil, nil, ErrReplayNoInterval
 	}
 
-	datasets := make(map[int64]int64, len(pairs))
+	ratesByDate := make(map[int64]map[string]db.DailyRate, len(pairs))
 	dateSets := make([][]time.Time, 0, len(pairs))
 	for _, p := range pairs {
-		ds, err := q.GetLatestRateDatasetForPair(ctx, p.ID)
+		rates, err := q.ListEffectiveDailyRatesForPair(ctx, p.ID)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, nil, nil, ErrReplayNoInterval
-			}
-			return nil, nil, nil, fmt.Errorf("get latest dataset for %s: %w", p.Symbol, err)
+			return nil, nil, nil, fmt.Errorf("list effective daily rates for %s: %w", p.Symbol, err)
 		}
-		datasets[p.ID] = ds.ID
-		dates, err := q.ListDailyRateDatesByDataset(ctx, ds.ID)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("list dates for %s: %w", p.Symbol, err)
+		byDate := make(map[string]db.DailyRate, len(rates))
+		dates := make([]time.Time, 0, len(rates))
+		for _, r := range rates {
+			key := r.Date.Time.Format("2006-01-02")
+			byDate[key] = r
+			dates = append(dates, r.Date.Time)
 		}
-		ts := make([]time.Time, len(dates))
-		for i, d := range dates {
-			ts[i] = d.Time
-		}
-		dateSets = append(dateSets, ts)
+		ratesByDate[p.ID] = byDate
+		dateSets = append(dateSets, dates)
 	}
 
 	common := intersectDates(dateSets)
@@ -563,40 +594,23 @@ func (s *ReplayService) selectInterval(ctx context.Context, q *db.Queries, now t
 	}
 
 	chosen := windows[s.pick(len(windows))]
-	return pairs, datasets, chosen.days, nil
+	return pairs, ratesByDate, chosen.days, nil
 }
 
-// buildCandles は各ペアの公開済み日足（day_index が [from, to] の範囲）を返す。
-// includeDates が true のとき（終了後）日付も入れる。
-//
-// 注意: 共通営業日は祝日などでカレンダー上は連続しない（あるペアだけ値が無い日は含まれない）ため、
-// 日付範囲で引いた daily_rates を単純に index で対応させず、日付をキーに対応させる。
-func (s *ReplayService) buildCandles(ctx context.Context, q *db.Queries, datasets map[int64]int64, days []time.Time, from, to int, includeDates bool) ([]ReplayPairCandles, error) {
-	result := make([]ReplayPairCandles, 0, len(datasets))
-	pairs, err := q.ListCurrencyPairs(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list currency pairs: %w", err)
-	}
+// buildReplayCandles は各ペアの公開済み日足（day_index が [from, to] の範囲）を返す。
+// includeDates が true のとき（終了後）日付も入れる。ratesByPair はゲーム開始時に記録した
+// 日足（pair_id → day_index → daily_rates の行）。日付でなく day_index をキーにするため、
+// 祝日などでカレンダー上は連続しない共通営業日にもそのまま対応できる。
+func buildReplayCandles(pairs []db.CurrencyPair, ratesByPair map[int64]map[int32]db.DailyRate, days []time.Time, from, to int, includeDates bool) []ReplayPairCandles {
+	result := make([]ReplayPairCandles, 0, len(pairs))
 	for _, p := range pairs {
-		datasetID, ok := datasets[p.ID]
+		byDay, ok := ratesByPair[p.ID]
 		if !ok {
 			continue
 		}
-		rates, err := q.ListDailyRatesByDatasetAndDateRange(ctx, db.ListDailyRatesByDatasetAndDateRangeParams{
-			DatasetID: datasetID,
-			Date:      pgtype.Date{Time: days[from], Valid: true},
-			Date_2:    pgtype.Date{Time: days[to], Valid: true},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("list daily rates for %s: %w", p.Symbol, err)
-		}
-		byDate := make(map[string]db.DailyRate, len(rates))
-		for _, r := range rates {
-			byDate[r.Date.Time.Format("2006-01-02")] = r
-		}
 		candles := make([]ReplayCandle, 0, to-from+1)
 		for i := from; i <= to; i++ {
-			r, ok := byDate[days[i].Format("2006-01-02")]
+			r, ok := byDay[int32(i)]
 			if !ok {
 				continue
 			}
@@ -615,7 +629,7 @@ func (s *ReplayService) buildCandles(ctx context.Context, q *db.Queries, dataset
 		}
 		result = append(result, ReplayPairCandles{PairID: p.ID, Candles: candles})
 	}
-	return result, nil
+	return result
 }
 
 // ---- 遅延評価（scale-to-zero との整合。design.md §13）----
@@ -694,25 +708,14 @@ func (s *ReplayService) liquidate(ctx context.Context, q *db.Queries, game db.Re
 	}
 	for _, pos := range positions {
 		pair := c.pairByID[pos.PairID]
-		datasetID := c.datasetByPair[pos.PairID]
 		notional := replayNotional(pos.InitialMargin, pos.Leverage)
 		line := replayLiquidationLine(Side(pos.Side), pos.EntryPrice, pos.Margin, notional)
 
 		// 建玉を持った日の次の公開日（entry_day+1）から判定する。
 		for d := pos.EntryDay + 1; d <= currentDay; d++ {
-			date, ok := c.dayByIndex[d]
+			rate, ok := c.rate(pos.PairID, d)
 			if !ok {
 				continue
-			}
-			rate, err := q.GetDailyRateByDatasetAndDate(ctx, db.GetDailyRateByDatasetAndDateParams{
-				DatasetID: datasetID,
-				Date:      pgtype.Date{Time: date, Valid: true},
-			})
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					continue
-				}
-				return funds, fmt.Errorf("get daily rate: %w", err)
 			}
 			// 買いは安値、売りは高値がラインに届いたら強制決済。
 			hit := false
@@ -762,14 +765,9 @@ func (s *ReplayService) settleAll(ctx context.Context, q *db.Queries, game db.Re
 	finalDay := int32(replayPreDays - 1 + replayIntervalDays)
 	for _, pos := range positions {
 		pair := c.pairByID[pos.PairID]
-		datasetID := c.datasetByPair[pos.PairID]
-		date := c.dayByIndex[finalDay]
-		rate, err := q.GetDailyRateByDatasetAndDate(ctx, db.GetDailyRateByDatasetAndDateParams{
-			DatasetID: datasetID,
-			Date:      pgtype.Date{Time: date, Valid: true},
-		})
-		if err != nil {
-			return funds, fmt.Errorf("get final daily rate: %w", err)
+		rate, ok := c.rate(pos.PairID, finalDay)
+		if !ok {
+			return funds, fmt.Errorf("final daily rate missing for %s", pair.Symbol)
 		}
 		notional := replayNotional(pos.InitialMargin, pos.Leverage)
 		pnl := replayPnL(Side(pos.Side), pos.EntryPrice, rate.Close, notional)
@@ -898,10 +896,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		// 終了後は全区間（80 日）を日付付きで返す（結果画面）。
 		currentDay = len(days) - 1
 	}
-	candles, err := s.buildCandles(ctx, q, c.datasetByPair, days, 0, currentDay, finished)
-	if err != nil {
-		return ReplayState{}, err
-	}
+	candles := buildReplayCandles(c.pairs, c.ratesByPair, days, 0, currentDay, finished)
 
 	state := ReplayState{
 		GameID:        game.ID,
@@ -1036,14 +1031,9 @@ func (s *ReplayService) PlaceOrder(ctx context.Context, token string, gameID int
 	}
 
 	currentDay := int32(replayPreDays - 1 + published)
-	date := c.dayByIndex[currentDay]
-	datasetID := c.datasetByPair[p.PairID]
-	rate, err := q.GetDailyRateByDatasetAndDate(ctx, db.GetDailyRateByDatasetAndDateParams{
-		DatasetID: datasetID,
-		Date:      pgtype.Date{Time: date, Valid: true},
-	})
-	if err != nil {
-		return ReplayOrderResult{}, fmt.Errorf("get current daily rate: %w", err)
+	rate, ok := c.rate(p.PairID, currentDay)
+	if !ok {
+		return ReplayOrderResult{}, fmt.Errorf("current daily rate missing for %s", pair.Symbol)
 	}
 	entryPrice := rate.Close
 
@@ -1150,14 +1140,9 @@ func (s *ReplayService) ClosePosition(ctx context.Context, token string, gameID,
 
 	pair := c.pairByID[pos.PairID]
 	currentDay := int32(replayPreDays - 1 + published)
-	date := c.dayByIndex[currentDay]
-	datasetID := c.datasetByPair[pos.PairID]
-	rate, err := q.GetDailyRateByDatasetAndDate(ctx, db.GetDailyRateByDatasetAndDateParams{
-		DatasetID: datasetID,
-		Date:      pgtype.Date{Time: date, Valid: true},
-	})
-	if err != nil {
-		return ReplayCloseResult{}, fmt.Errorf("get current daily rate: %w", err)
+	rate, ok := c.rate(pos.PairID, currentDay)
+	if !ok {
+		return ReplayCloseResult{}, fmt.Errorf("current daily rate missing for %s", pair.Symbol)
 	}
 	exitPrice := rate.Close
 

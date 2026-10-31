@@ -44,16 +44,16 @@ CREATE TABLE replay_game_days (
     PRIMARY KEY (game_id, day_index)
 );
 
--- replay_game_datasets: ゲームが使ったデータセット（通貨ペアごとに 1 つ）。
--- ゲーム開始時点で一番新しく取り込まれた（imported_at 最新）データセットを記録し、
--- 以降はそれだけを読む（後からデータセットが増えてもゲームの値は変わらない。#103）。
-CREATE TABLE replay_game_datasets (
-    game_id     BIGINT NOT NULL REFERENCES replay_games(id),
-    pair_id     BIGINT NOT NULL REFERENCES currency_pairs(id),
-    dataset_id  BIGINT NOT NULL,
-    PRIMARY KEY (game_id, pair_id),
-    -- データセットの通貨ペアと行の通貨ペアが食い違う状態を DB で防ぐ（daily_rates と同じ）。
-    FOREIGN KEY (dataset_id, pair_id) REFERENCES rate_datasets (id, pair_id)
+-- replay_game_rates: ゲームが使った日足の行そのもの（80 日 × 全ペア）を開始時に記録する。
+-- 各ペア・各日付について imported_at が最新のデータセットの日足（daily_rates の行）を
+-- daily_rate_id で参照し、以降の約定・強制決済・状態取得はこの表経由で読む（後から
+-- データセットが増えてもゲームの値は変わらない。#103）。
+CREATE TABLE replay_game_rates (
+    game_id       BIGINT NOT NULL REFERENCES replay_games(id),
+    pair_id       BIGINT NOT NULL REFERENCES currency_pairs(id),
+    day_index     INT    NOT NULL,   -- replay_game_days の通し番号（0..79）
+    daily_rate_id BIGINT NOT NULL REFERENCES daily_rates(id),
+    PRIMARY KEY (game_id, pair_id, day_index)
 );
 
 -- replay_speed_changes: 速さ（×1 / ×2 / ×3）の変更履歴（design.md §13 scale-to-zero）。
@@ -84,7 +84,7 @@ CREATE TABLE replay_positions (
     status         TEXT           NOT NULL,   -- open / closed / liquidated
     closed_day     INT,           -- 決済した日（day_index の通し番号）
     close_price    NUMERIC(20,8), -- 決済価格
-    pnl            NUMERIC(20,8), -- 実現損益（証拠金 + 損益 - 決済手数料。強制決済は0）
+    pnl            NUMERIC(20,8), -- 実現損益（replayPnL の値 = 取引規模 × 価格の変化率。決済で戻る額は別計算）
     created_at     TIMESTAMPTZ    NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_replay_positions_game ON replay_positions (game_id);

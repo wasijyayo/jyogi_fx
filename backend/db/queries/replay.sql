@@ -12,30 +12,16 @@ ORDER BY id;
 SELECT * FROM currency_pairs
 WHERE id = $1;
 
--- name: GetLatestRateDatasetForPair :one
--- ゲーム開始時点で一番新しく取り込まれた（imported_at 最新）データセットを取り出す
--- （#103 マネージャー決定）。同時刻は id の大きい方を優先して決定的にする。
-SELECT * FROM rate_datasets
-WHERE pair_id = $1
-ORDER BY imported_at DESC, id DESC
-LIMIT 1;
-
--- name: ListDailyRateDatesByDataset :many
--- 1 データセットに含まれる日付を日付順で返す（共通営業日の交差を取る起点）。
-SELECT date FROM daily_rates
-WHERE dataset_id = $1
-ORDER BY date;
-
--- name: GetDailyRateByDatasetAndDate :one
--- 強制決済の判定・約定に使う 1 日分の日足（データセット × 日付）。
-SELECT * FROM daily_rates
-WHERE dataset_id = $1 AND date = $2;
-
--- name: ListDailyRatesByDatasetAndDateRange :many
--- 状態取得で公開済みの日足をまとめて返す（データセット × 日付範囲）。
-SELECT * FROM daily_rates
-WHERE dataset_id = $1 AND date >= $2 AND date <= $3
-ORDER BY date;
+-- name: ListEffectiveDailyRatesForPair :many
+-- 各日付について、そのゲームの開始時点で一番新しく取り込まれた（imported_at 最新）データセットの
+-- 日足を取り出す（区間選び・ゲームが使う値の決定の起点。#103 マネージャー決定）。
+-- 同じ日付に複数データセットがある場合は imported_at が最新、同時刻は id の大きい方を優先して決定的にする。
+SELECT DISTINCT ON (dr.date)
+    dr.id, dr.dataset_id, dr.pair_id, dr.date, dr.open, dr.high, dr.low, dr.close
+FROM daily_rates dr
+JOIN rate_datasets rd ON rd.id = dr.dataset_id
+WHERE dr.pair_id = $1
+ORDER BY dr.date, rd.imported_at DESC, rd.id DESC;
 
 -- name: CreateReplayGame :one
 -- ゲームを 1 件作る（#103 REPLAY-3）。開始時の status は playing、funds は初期資金。
@@ -73,16 +59,19 @@ SELECT * FROM replay_game_days
 WHERE game_id = $1
 ORDER BY day_index;
 
--- name: CreateReplayGameDataset :exec
--- ゲームが使ったデータセットを通貨ペアごとに記録する（#103）。
-INSERT INTO replay_game_datasets (game_id, pair_id, dataset_id)
-VALUES ($1, $2, $3);
+-- name: CreateReplayGameRate :exec
+-- ゲームが使う日足の行（daily_rates への参照）を 1 日分記録する（#103）。
+INSERT INTO replay_game_rates (game_id, pair_id, day_index, daily_rate_id)
+VALUES ($1, $2, $3, $4);
 
--- name: ListReplayGameDatasets :many
--- ゲームが使ったデータセット（通貨ペア × データセット）を返す。
-SELECT * FROM replay_game_datasets
-WHERE game_id = $1
-ORDER BY pair_id;
+-- name: ListReplayGameRates :many
+-- ゲームが使う日足を全ペア・全日分、daily_rates と結合して返す（約定・強制決済・状態取得で読む）。
+SELECT rgr.pair_id, rgr.day_index,
+       dr.id, dr.dataset_id, dr.date, dr.open, dr.high, dr.low, dr.close
+FROM replay_game_rates rgr
+JOIN daily_rates dr ON dr.id = rgr.daily_rate_id
+WHERE rgr.game_id = $1
+ORDER BY rgr.pair_id, rgr.day_index;
 
 -- name: CreateReplaySpeedChange :exec
 -- 速さの変更を履歴に記録する（design.md §13 scale-to-zero）。
