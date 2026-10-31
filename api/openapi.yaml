@@ -231,12 +231,335 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/replay/games:
+    post:
+      operationId: startReplayGame
+      summary: 過去チャートモードのゲームを開始する（ログイン不要・ゲスト可）
+      tags: [replay]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayStartRequest"
+      responses:
+        "200":
+          description: ゲーム開始（トークンを返す。以降の操作はこのトークンで行う）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayGameStarted"
+        "400":
+          description: ゲスト名が不正（未ログインで 1〜16 文字でない）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 開始できる区間が無い（取り込み済みデータ不足）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/replay/games/{gameId}:
+    get:
+      operationId: getReplayGameState
+      summary: 過去チャートモードのゲーム状態を取得する
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayGameState"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲームが存在しない（またはトークンが合わない）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/replay/games/{gameId}/orders:
+    post:
+      operationId: placeReplayOrder
+      summary: 過去チャートモードで注文する
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayOrderRequest"
+      responses:
+        "200":
+          description: 注文成立
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayOrderResult"
+        "400":
+          description: 入力が不正（売買方向・証拠金・レバレッジ）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲーム・通貨ペアが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 残高不足・レバレッジ超過・ゲーム終了済み・反対方向の建玉あり
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/replay/games/{gameId}/positions/{positionId}/close:
+    post:
+      operationId: closeReplayPosition
+      summary: 過去チャートモードの建玉を決済する
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: positionId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: 決済完了
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayCloseResult"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲーム・建玉が存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: すでに決済済み・ゲーム終了済み
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/replay/games/{gameId}/positions/{positionId}/margin:
+    post:
+      operationId: addReplayMargin
+      summary: 過去チャートモードの建玉に証拠金を追加する
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: positionId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayAddMarginRequest"
+      responses:
+        "200":
+          description: 追加完了
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayAddMarginResult"
+        "400":
+          description: 追加額が不正（1 以上の整数でない）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲーム・建玉が存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 残高不足・すでに決済済み・ゲーム終了済み
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/replay/games/{gameId}/leverage:
+    post:
+      operationId: unlockReplayLeverage
+      summary: 過去チャートモードで通貨ペアのレバレッジ上限を解放する
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayUnlockLeverageRequest"
+      responses:
+        "200":
+          description: 解放完了
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayUnlockLeverageResult"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲーム・通貨ペアが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 残高不足・ゲーム終了済み
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/replay/games/{gameId}/speed:
+    post:
+      operationId: changeReplaySpeed
+      summary: 過去チャートモードの速さを変更する
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayChangeSpeedRequest"
+      responses:
+        "200":
+          description: 変更完了
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayChangeSpeedResult"
+        "400":
+          description: 速さが不正（1/2/3 以外）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲームが存在しない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: ゲーム終了済み
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     cookieAuth:
       type: apiKey
       in: cookie
       name: session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "過去チャートモードのゲームトークン（開始時に発行。Authorization: Bearer <token> で送る）"
 
   schemas:
     Me:
@@ -466,6 +789,340 @@ components:
         newBalance:
           type: string
           description: 決済後の残高（decimal文字列）
+
+    ReplayStartRequest:
+      type: object
+      properties:
+        guestName:
+          type: string
+          description: ゲスト名（未ログイン時のみ必須。前後の空白を除いて 1〜16 文字）
+
+    ReplayGameStarted:
+      type: object
+      required:
+        - gameId
+        - token
+        - startYear
+        - funds
+        - speed
+        - publishedDays
+        - pairs
+        - candlesByPair
+      properties:
+        gameId:
+          type: integer
+          format: int64
+        token:
+          type: string
+          description: "ゲームトークン。以降の操作は Authorization: Bearer <token> で行う"
+        startYear:
+          type: integer
+          description: 開始年（終了までは年だけ公開。design.md §13）
+        funds:
+          type: string
+        speed:
+          type: integer
+        publishedDays:
+          type: integer
+          description: 公開済みの区間営業日数（0..60）
+        pairs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayPair"
+        candlesByPair:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayPairCandles"
+
+    ReplayPair:
+      type: object
+      required:
+        - pairId
+        - symbol
+        - baseLeverage
+        - maxLeverage
+        - feeRate
+      properties:
+        pairId:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        baseLeverage:
+          type: string
+          description: 初期のレバレッジ上限（通貨ペアの行の値）
+        maxLeverage:
+          type: string
+          description: 現在のレバレッジ上限（上限解放を反映した値）
+        feeRate:
+          type: string
+          description: 片道手数料率（decimal文字列）
+
+    ReplayCandle:
+      type: object
+      required:
+        - day
+        - open
+        - high
+        - low
+        - close
+      properties:
+        day:
+          type: integer
+          description: 通し番号（0..79）。0〜19 が開始前 20 日、20〜79 が区間 60 日
+        open:
+          type: string
+        high:
+          type: string
+        low:
+          type: string
+        close:
+          type: string
+        date:
+          type: string
+          format: date
+          nullable: true
+          description: 終了後にのみセットされる正確な日付（終了前は常に null）
+
+    ReplayPairCandles:
+      type: object
+      required:
+        - pairId
+        - candles
+      properties:
+        pairId:
+          type: integer
+          format: int64
+        candles:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayCandle"
+
+    ReplayPosition:
+      type: object
+      required:
+        - id
+        - pairId
+        - symbol
+        - side
+        - initialMargin
+        - margin
+        - leverage
+        - entryPrice
+        - entryDay
+        - liquidationLine
+        - status
+      properties:
+        id:
+          type: integer
+          format: int64
+        pairId:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        side:
+          type: string
+          description: long / short
+        initialMargin:
+          type: string
+          description: 建玉時の証拠金（取引規模・手数料の基準）
+        margin:
+          type: string
+          description: 現在の証拠金（追加分込み）
+        leverage:
+          type: integer
+        entryPrice:
+          type: string
+        entryDay:
+          type: integer
+          description: 建てた日（通し番号 0..79）
+        liquidationLine:
+          type: string
+          description: 強制決済ライン（買いは安値・売りは高値が届くと強制決済）
+        status:
+          type: string
+          description: open / closed / liquidated
+        closePrice:
+          type: string
+          nullable: true
+        pnl:
+          type: string
+          nullable: true
+          description: 損益（証拠金 × レバレッジ × 価格変化率。負値は損失）
+
+    ReplayGameState:
+      type: object
+      required:
+        - gameId
+        - status
+        - startYear
+        - funds
+        - speed
+        - publishedDays
+        - pairs
+        - positions
+        - candlesByPair
+      properties:
+        gameId:
+          type: integer
+          format: int64
+        status:
+          type: string
+          description: playing / finished / early_finished
+        startYear:
+          type: integer
+        funds:
+          type: string
+        speed:
+          type: integer
+        publishedDays:
+          type: integer
+        pairs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayPair"
+        positions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayPosition"
+        candlesByPair:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplayPairCandles"
+        intervalStart:
+          type: string
+          format: date
+          nullable: true
+          description: 区間の開始日（終了後にのみセット）
+        intervalEnd:
+          type: string
+          format: date
+          nullable: true
+          description: 区間の終了日（終了後にのみセット）
+        finalFunds:
+          type: string
+          nullable: true
+          description: スコア（最終資金。終了後にのみセット）
+
+    ReplayOrderRequest:
+      type: object
+      required:
+        - pairId
+        - side
+        - margin
+        - leverage
+      properties:
+        pairId:
+          type: integer
+          format: int64
+        side:
+          type: string
+          enum: [long, short]
+        margin:
+          type: string
+          description: 証拠金（1 以上の整数）
+        leverage:
+          type: string
+          description: レバレッジ（1 以上の整数）
+
+    ReplayOrderResult:
+      type: object
+      required:
+        - position
+        - funds
+      properties:
+        position:
+          $ref: "#/components/schemas/ReplayPosition"
+        funds:
+          type: string
+
+    ReplayCloseResult:
+      type: object
+      required:
+        - position
+        - pnl
+        - funds
+      properties:
+        position:
+          $ref: "#/components/schemas/ReplayPosition"
+        pnl:
+          type: string
+        funds:
+          type: string
+
+    ReplayAddMarginRequest:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: string
+          description: 追加する証拠金（1 以上の整数）
+
+    ReplayAddMarginResult:
+      type: object
+      required:
+        - position
+        - funds
+      properties:
+        position:
+          $ref: "#/components/schemas/ReplayPosition"
+        funds:
+          type: string
+
+    ReplayUnlockLeverageRequest:
+      type: object
+      required:
+        - pairId
+      properties:
+        pairId:
+          type: integer
+          format: int64
+
+    ReplayUnlockLeverageResult:
+      type: object
+      required:
+        - pairId
+        - tier
+        - maxLeverage
+        - cost
+        - funds
+      properties:
+        pairId:
+          type: integer
+          format: int64
+        tier:
+          type: integer
+          description: 解放後の段数
+        maxLeverage:
+          type: string
+          description: 解放後のレバレッジ上限
+        cost:
+          type: string
+          description: 今回の費用
+        funds:
+          type: string
+
+    ReplayChangeSpeedRequest:
+      type: object
+      required:
+        - speed
+      properties:
+        speed:
+          type: integer
+          description: 1 / 2 / 3
+
+    ReplayChangeSpeedResult:
+      type: object
+      required:
+        - speed
+        - publishedDays
+      properties:
+        speed:
+          type: integer
+        publishedDays:
+          type: integer
 
     Error:
       type: object

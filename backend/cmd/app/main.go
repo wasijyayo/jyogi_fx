@@ -187,6 +187,7 @@ func runServe() error {
 
 	profileSvc := game.NewProfileService(pool, game.RealClock{}, rankingSvc)
 	quoteSvc := game.NewQuoteService(pool, game.RealClock{})
+	replaySvc := game.NewReplayService(pool, game.RealClock{})
 
 	// Discord の Embed から通貨ページへ飛ぶリンクボタンの基底 URL（#100 WEB-5）。
 	// 未設定ならボタンを付けないだけで起動は続ける。ただし値が不正だと Discord が
@@ -205,6 +206,7 @@ func runServe() error {
 		Trade:            tradeSvc,
 		Claim:            claimSvc,
 		Session:          sessionSvc,
+		Replay:           replaySvc,
 		SecureCookies:    secureCookies,
 		DiscordPublicKey: discordPublicKey,
 		TickSharedSecret: tickSharedSecret,
