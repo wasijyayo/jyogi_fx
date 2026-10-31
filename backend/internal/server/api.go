@@ -17,6 +17,7 @@ type apiServer struct {
 	quote   *game.QuoteService
 	session *game.SessionService
 	trade   *game.TradeService
+	replay  *game.ReplayService
 	clock   game.Clock
 }
 
@@ -28,6 +29,7 @@ func registerAPIRoutes(mux *http.ServeMux, cfg Config) {
 		quote:   cfg.Quote,
 		session: cfg.Session,
 		trade:   cfg.Trade,
+		replay:  cfg.Replay,
 		clock:   cfg.Clock,
 	}, mux)
 }
