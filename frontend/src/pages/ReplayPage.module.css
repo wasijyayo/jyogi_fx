@@ -70,6 +70,7 @@
   flex-direction: column;
   gap: 4px;
   margin: 12px 0 0;
+  min-width: 0;
 }
 
 .fieldLabel {
@@ -87,7 +88,10 @@
 }
 
 .textInput {
+  width: 100%;
   max-width: 240px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .smallInput {
