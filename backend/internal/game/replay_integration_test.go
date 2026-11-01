@@ -60,6 +60,7 @@ func replayTestDates(start time.Time, n int) []time.Time {
 
 // replayCleanupOrder は replay 系の後始末の SQL を子テーブルから順に並べたもの。
 var replayCleanupOrder = []string{
+	`DELETE FROM replay_leverage_unlock_payments`,
 	`DELETE FROM replay_positions`,
 	`DELETE FROM replay_leverage_unlocks`,
 	`DELETE FROM replay_speed_changes`,
@@ -1108,6 +1109,7 @@ func cleanupReplayRankingRows(t *testing.T, pool *pgxpool.Pool, gameIDs []int64,
 	cctx := context.Background()
 	if len(gameIDs) > 0 {
 		for _, table := range []string{
+			"replay_leverage_unlock_payments",
 			"replay_positions",
 			"replay_leverage_unlocks",
 			"replay_speed_changes",
@@ -1429,5 +1431,211 @@ func TestReplay_RankingContinuesAfterFailedGame(t *testing.T) {
 	}
 	if brokenStatus != replayStatusPlaying {
 		t.Errorf("broken game status = %s, want playing", brokenStatus)
+	}
+}
+
+// TestReplay_Result は決済・強制決済・上限解放を含むゲームで、結果 API の集計値と
+// 資産推移が正しいことを確認する（#127 REPLAY-10 完了条件）。
+func TestReplay_Result(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	dates := replayTestDates(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
+	// day 20 は終値 110（買いの決済で +100）、day 21 は高値 125（売りの強制決済ライン
+	// 121 に届く）。開始前 20 日は 100。
+	bar := func(_ string, day int) (string, string, string, string) {
+		switch {
+		case day < 20:
+			return "100", "105", "95", "100"
+		case day == 20:
+			return "100", "115", "95", "110"
+		default:
+			return "110", "125", "105", "110"
+		}
+	}
+	pairs := insertReplayData(t, ctx, pool, dates, bar)
+
+	clock := &replayTestClock{now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}
+	svc := newReplayServiceForTest(pool, clock)
+
+	res, err := svc.StartGame(ctx, "", "result-tester")
+	if err != nil {
+		t.Fatalf("StartGame: %v", err)
+	}
+	usd := pairBySymbol(t, pairs, "USD/JPY")
+	eur := pairBySymbol(t, pairs, "EUR/USD")
+
+	// 終了前は結果を返さない（区間の日付も返さない）。
+	if _, err := svc.GetResult(ctx, res.Token, res.GameID); !errors.Is(err, ErrReplayGameNotFinished) {
+		t.Fatalf("GetResult before finish = %v, want ErrReplayGameNotFinished", err)
+	}
+
+	// 上限解放（250）→ 買い（証拠金 100・10 倍）。資金は 649.5。
+	unlock, err := svc.UnlockLeverage(ctx, res.Token, res.GameID, usd.ID)
+	if err != nil {
+		t.Fatalf("UnlockLeverage: %v", err)
+	}
+	if !unlock.Cost.Equal(dec("250")) {
+		t.Fatalf("unlock cost = %s, want 250", unlock.Cost)
+	}
+	long, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: usd.ID, Side: SideLong, Margin: dec("100"), Leverage: dec("10"),
+	})
+	if err != nil {
+		t.Fatalf("place long: %v", err)
+	}
+
+	// day 20 を公開して買いを +100 で決済し、同じ日に売りを建てる。
+	clock.now = clock.now.Add(3 * time.Second)
+	if _, err := svc.GetState(ctx, res.Token, res.GameID); err != nil {
+		t.Fatalf("GetState day 20: %v", err)
+	}
+	closed, err := svc.ClosePosition(ctx, res.Token, res.GameID, long.Position.ID)
+	if err != nil {
+		t.Fatalf("ClosePosition: %v", err)
+	}
+	if !closed.Pnl.Equal(dec("100")) {
+		t.Errorf("closed pnl = %s, want 100", closed.Pnl)
+	}
+	if !closed.Funds.Equal(dec("849")) {
+		t.Errorf("funds after close = %s, want 849", closed.Funds)
+	}
+	short, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: eur.ID, Side: SideShort, Margin: dec("100"), Leverage: dec("10"),
+	})
+	if err != nil {
+		t.Fatalf("place short: %v", err)
+	}
+	// 売りの強制決済ライン = 110 × (1 + 100/1000) = 121。
+	if !short.Position.LiquidationLine.Equal(dec("121")) {
+		t.Fatalf("short liquidation line = %s, want 121", short.Position.LiquidationLine)
+	}
+
+	// day 21 の高値 125 で強制決済（損失 -100・戻る額 0）。終了前は決済日を返さない。
+	clock.now = clock.now.Add(3 * time.Second)
+	state, err := svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState day 21: %v", err)
+	}
+	if len(state.Positions) != 0 {
+		t.Fatalf("open positions = %d, want 0", len(state.Positions))
+	}
+	if len(state.ClosedPositions) != 2 {
+		t.Fatalf("closed positions = %d, want 2", len(state.ClosedPositions))
+	}
+	for _, pos := range state.ClosedPositions {
+		if pos.ClosedDay == nil {
+			t.Errorf("closed position %d has no closedDay", pos.ID)
+		}
+		if pos.ClosedDate != nil {
+			t.Errorf("closed position %d leaks closedDate before finish", pos.ID)
+		}
+	}
+
+	// 最後まで進めて確定する。最終資金 = 1000 − 250（上限解放）− 1（手数料 2 回）
+	// + 100（買いの利益）− 100（売りの損失）= 748.5。
+	clock.now = clock.now.Add(180 * time.Second)
+	state, err = svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState final: %v", err)
+	}
+	if state.Status != replayStatusFinished {
+		t.Fatalf("status = %s, want finished", state.Status)
+	}
+	if !state.Funds.Equal(dec("748.5")) {
+		t.Errorf("final funds = %s, want 748.5", state.Funds)
+	}
+	// 終了後は決済日も正確な日付で返る。
+	for _, pos := range state.ClosedPositions {
+		if pos.ClosedDay == nil || pos.ClosedDate == nil {
+			t.Errorf("closed position %d has no closed day/date after finish: %+v", pos.ID, pos)
+		}
+	}
+
+	result, err := svc.GetResult(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetResult: %v", err)
+	}
+	if result.Status != replayStatusFinished {
+		t.Errorf("result status = %s, want finished", result.Status)
+	}
+	if !result.FinalFunds.Equal(dec("748.5")) {
+		t.Errorf("result finalFunds = %s, want 748.5", result.FinalFunds)
+	}
+	if !result.IntervalStart.Equal(dates[20]) {
+		t.Errorf("intervalStart = %s, want %s", result.IntervalStart, dates[20].Format("2006-01-02"))
+	}
+	if !result.IntervalEnd.Equal(dates[79]) {
+		t.Errorf("intervalEnd = %s, want %s", result.IntervalEnd, dates[79].Format("2006-01-02"))
+	}
+	if !result.MaxProfit.Equal(dec("100")) {
+		t.Errorf("maxProfit = %s, want 100", result.MaxProfit)
+	}
+	if !result.MaxLoss.Equal(dec("-100")) {
+		t.Errorf("maxLoss = %s, want -100", result.MaxLoss)
+	}
+	if !result.WinRate.Equal(dec("50")) {
+		t.Errorf("winRate = %s, want 50", result.WinRate)
+	}
+	if result.LiquidationCount != 1 {
+		t.Errorf("liquidationCount = %d, want 1", result.LiquidationCount)
+	}
+	if !result.MaxFunds.Equal(dec("1000")) {
+		t.Errorf("maxFunds = %s, want 1000 (初期資金が最大)", result.MaxFunds)
+	}
+	// ゲストは自己ベストの概念がないため false。順位・参加者数はランキングと同じ並び。
+	if result.IsPersonalBest {
+		t.Error("guest result must not be a personal best")
+	}
+	rankingRows, err := db.New(pool).ListReplayRankingAll(ctx)
+	if err != nil {
+		t.Fatalf("ListReplayRankingAll: %v", err)
+	}
+	wantRank := 0
+	for i, row := range rankingRows {
+		if row.ID == res.GameID {
+			wantRank = i + 1
+			break
+		}
+	}
+	if wantRank == 0 {
+		t.Fatalf("game %d not found in ranking", res.GameID)
+	}
+	if result.Rank != wantRank {
+		t.Errorf("rank = %d, want %d", result.Rank, wantRank)
+	}
+	if result.Participants != len(rankingRows) {
+		t.Errorf("participants = %d, want %d", result.Participants, len(rankingRows))
+	}
+
+	// 資産推移は区間 60 営業日。day 20 は 848.5、day 21 以降は 748.5。
+	if len(result.AssetHistory) != replayIntervalDays {
+		t.Fatalf("asset history points = %d, want %d", len(result.AssetHistory), replayIntervalDays)
+	}
+	first := result.AssetHistory[0]
+	if first.Day != 20 || !first.Equity.Equal(dec("848.5")) || !first.Date.Equal(dates[20]) {
+		t.Errorf("assetHistory[0] = %+v, want day 20/848.5/%s", first, dates[20].Format("2006-01-02"))
+	}
+	for _, point := range result.AssetHistory[1:] {
+		if !point.Equity.Equal(dec("748.5")) {
+			t.Errorf("assetHistory day %d equity = %s, want 748.5", point.Day, point.Equity)
+		}
+	}
+	last := result.AssetHistory[len(result.AssetHistory)-1]
+	if last.Day != 79 || !last.Date.Equal(dates[79]) {
+		t.Errorf("assetHistory last = %+v, want day 79/%s", last, dates[79].Format("2006-01-02"))
+	}
+
+	// 上限解放の支払いログが保存されている（ゲーム・通貨ペア・段・公開日・費用）。
+	var payments int
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM replay_leverage_unlock_payments
+		WHERE game_id = $1 AND pair_id = $2 AND tier = 1 AND day_index = 19 AND cost = 250`,
+		res.GameID, usd.ID).Scan(&payments); err != nil {
+		t.Fatalf("query unlock payments: %v", err)
+	}
+	if payments != 1 {
+		t.Errorf("unlock payment logs = %d, want 1", payments)
 	}
 }

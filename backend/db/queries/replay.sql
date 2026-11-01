@@ -97,6 +97,18 @@ SELECT * FROM replay_positions
 WHERE game_id = $1 AND status = 'open'
 ORDER BY id;
 
+-- name: ListReplayPositions :many
+-- ゲームの建玉を決済済み・未決済の両方まとめて返す（結果 API の集計に使う）。
+SELECT * FROM replay_positions
+WHERE game_id = $1
+ORDER BY id;
+
+-- name: ListClosedReplayPositions :many
+-- 決済済み・強制決済済みの建玉を返す（状態取得の closedPositions に使う）。
+SELECT * FROM replay_positions
+WHERE game_id = $1 AND status <> 'open'
+ORDER BY id;
+
 -- name: GetReplayPositionForUpdate :one
 -- 決済・証拠金追加の前に建玉の行をロックして読み込む（#103）。
 -- game_id も条件に含め、他人のゲームの建玉IDの存在有無を漏らさない。
@@ -136,6 +148,18 @@ VALUES ($1, $2, $3)
 ON CONFLICT (game_id, pair_id) DO UPDATE SET tier = EXCLUDED.tier
 RETURNING *;
 
+-- name: CreateReplayLeverageUnlockPayment :one
+-- 上限解放の支払いを 1 件記録する（#127）。ゲーム・通貨ペア・段・公開日・費用を残す。
+INSERT INTO replay_leverage_unlock_payments (game_id, pair_id, tier, day_index, cost)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: ListReplayLeverageUnlockPayments :many
+-- ゲームの上限解放の支払いログを公開日順で返す（結果 API の資産推移に使う）。
+SELECT * FROM replay_leverage_unlock_payments
+WHERE game_id = $1
+ORDER BY day_index, id;
+
 -- name: ListPlayingReplayGameIDs :many
 -- ランキング取得の前に遅延評価（強制決済・確定・早期終了）を行う対象のゲームIDを返す
 -- （design.md §13 scale-to-zero。status = playing のすべて。#104 REPLAY-4）。
@@ -172,3 +196,31 @@ FROM replay_games rg
 WHERE rg.final_funds IS NOT NULL AND rg.user_id IS NULL
 ORDER BY final_funds DESC, finished_at ASC, id ASC
 LIMIT 20;
+
+-- name: ListReplayRankingAll :many
+-- 結果 API 用に、ランキングの全行を ListReplayRanking と同じ並びで返す（#127 REPLAY-10）。
+-- 並びは final_funds DESC, finished_at ASC, id ASC。ログインユーザーは 1 人 1 行
+-- （最高記録）、ゲストは 1 プレイ 1 行。順位はこの並びの位置（1 始まり）で求める。
+-- 上位 20 件に限らないのは、結果画面で自分の順位を出すため。
+WITH best_users AS (
+    SELECT DISTINCT ON (rg.user_id)
+        rg.id,
+        rg.user_id,
+        rg.guest_name,
+        u.display_name,
+        u.avatar,
+        rg.final_funds,
+        rg.finished_at
+    FROM replay_games rg
+    JOIN users u ON u.discord_id = rg.user_id
+    WHERE rg.final_funds IS NOT NULL AND rg.user_id IS NOT NULL
+    ORDER BY rg.user_id, rg.final_funds DESC, rg.finished_at ASC, rg.id ASC
+)
+SELECT id, user_id, guest_name, display_name, avatar, final_funds, finished_at
+FROM best_users
+UNION ALL
+SELECT rg.id, rg.user_id, rg.guest_name, ''::text AS display_name, NULL::text AS avatar,
+       rg.final_funds, rg.finished_at
+FROM replay_games rg
+WHERE rg.final_funds IS NOT NULL AND rg.user_id IS NULL
+ORDER BY final_funds DESC, finished_at ASC, id ASC;
