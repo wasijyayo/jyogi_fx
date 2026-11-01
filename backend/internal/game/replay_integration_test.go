@@ -194,7 +194,7 @@ func newReplayServiceForTest(pool *pgxpool.Pool, clock Clock) *ReplayService {
 }
 
 // beginReplayGameForTest は StartGame のあとに「取引開始」を押した状態にする（#126 REPLAY-9）。
-// begin は started_at を「そのときの時刻 + 3 秒」にするので、時計もその時刻まで進めておく。
+// begin は started_at を「そのときの時刻 + 5 秒」にするので、時計もその時刻まで進めておく。
 // これにより、以降のテストは「時間が動き始めた時点」を基準に clock.now を進められる。
 func beginReplayGameForTest(t *testing.T, ctx context.Context, svc *ReplayService, clock *replayTestClock, res ReplayStartResult) {
 	t.Helper()
@@ -798,7 +798,7 @@ func TestReplay_OrderRestrictions(t *testing.T) {
 }
 
 // TestReplay_BeginGame は ready → begin → playing の流れを固定クロックで確認する
-// （#126 REPLAY-9 の完了条件）。begin 前は日足が公開されず、begin の 3 秒後から
+// （#126 REPLAY-9 の完了条件）。begin 前は日足が公開されず、begin の 5 秒後から
 // 1 日目が公開される。
 func TestReplay_BeginGame(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -859,7 +859,7 @@ func TestReplay_BeginGame(t *testing.T) {
 		}
 	}
 
-	// begin で started_at = 現在時刻 + 3 秒、status = playing になる。
+	// begin で started_at = 現在時刻 + 5 秒、status = playing になる。
 	state, err = svc.BeginGame(ctx, res.Token, res.GameID)
 	if err != nil {
 		t.Fatalf("BeginGame: %v", err)
@@ -893,7 +893,7 @@ func TestReplay_BeginGame(t *testing.T) {
 		t.Errorf("started_at after second begin = %s, want %s", startedAtAgain, wantStart)
 	}
 
-	// 開始時刻の直前までは 0 日、3 秒経過で 1 日目が公開される。
+	// 開始時刻の直前までは 0 日、3 秒（1 営業日分）経過で 1 日目が公開される。
 	clock.now = wantStart.Add(3*time.Second - time.Nanosecond)
 	state, err = svc.GetState(ctx, res.Token, res.GameID)
 	if err != nil {

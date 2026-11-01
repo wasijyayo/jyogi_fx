@@ -5,6 +5,9 @@ import {
   REPLAY_INTERVAL_DAYS,
   REPLAY_MIN_POLL_MS,
   REPLAY_POLL_MARGIN_MS,
+  canReplayOrder,
+  clampReplayLeverage,
+  clampReplayMargin,
   formatRemainingTime,
   formatReplayDate,
   formatReplayInterval,
@@ -12,12 +15,16 @@ import {
   isPositiveIntegerString,
   isReplayFinishedStatus,
   latestReplayClose,
+  replayCountdownValue,
   replayDayLabel,
   replayErrorMessage,
+  replayMaxMargin,
   replayPollDelayMs,
   replayPollIntervalMs,
   replayPricePrecision,
   replayRemainingSeconds,
+  stepReplayLeverage,
+  stepReplayMargin,
   validateGuestName,
 } from './replay';
 
@@ -120,6 +127,62 @@ describe('isPositiveIntegerString', () => {
     expect(isPositiveIntegerString('-1')).toBe(false);
     expect(isPositiveIntegerString('1.5')).toBe(false);
     expect(isPositiveIntegerString('abc')).toBe(false);
+  });
+});
+
+describe('注文の値の丸め（#138 REPLAY-13）', () => {
+  it('証拠金は 1〜資金の整数部に収める', () => {
+    expect(clampReplayMargin('500', '1000')).toBe(500);
+    expect(clampReplayMargin('0', '1000')).toBe(1);
+    expect(clampReplayMargin('-20', '1000')).toBe(1);
+    expect(clampReplayMargin('1200', '1000')).toBe(1000);
+    expect(clampReplayMargin('999', '987.65')).toBe(987);
+  });
+
+  it('レバレッジは 1〜現在の上限に収める', () => {
+    expect(clampReplayLeverage('10', '25')).toBe(10);
+    expect(clampReplayLeverage('0', '25')).toBe(1);
+    expect(clampReplayLeverage('30', '25')).toBe(25);
+  });
+
+  it('刻みボタンは現在値に足して丸める', () => {
+    expect(stepReplayMargin('100', 500, '1000')).toBe('600');
+    expect(stepReplayMargin('100', -500, '1000')).toBe('1');
+    expect(stepReplayMargin('900', 500, '1000')).toBe('1000');
+    expect(stepReplayLeverage('25', 10, '25')).toBe('25');
+    expect(stepReplayLeverage('2', -5, '25')).toBe('1');
+  });
+
+  it('資金の整数部と注文できるかを返す', () => {
+    expect(replayMaxMargin('1000.00000000')).toBe(1000);
+    expect(replayMaxMargin('0.5')).toBe(0);
+    expect(canReplayOrder('1000')).toBe(true);
+    expect(canReplayOrder('0')).toBe(false);
+    expect(canReplayOrder('0.00000001')).toBe(false);
+  });
+});
+
+describe('replayCountdownValue', () => {
+  it('5 秒のカウントダウンを 5・4・3・2・1 と出す', () => {
+    expect(replayCountdownValue(0)).toBe(5);
+    expect(replayCountdownValue(999)).toBe(5);
+    expect(replayCountdownValue(1000)).toBe(4);
+    expect(replayCountdownValue(1999)).toBe(4);
+    expect(replayCountdownValue(2000)).toBe(3);
+    expect(replayCountdownValue(3000)).toBe(2);
+    expect(replayCountdownValue(4000)).toBe(1);
+    expect(replayCountdownValue(4999)).toBe(1);
+  });
+
+  it('5 秒を過ぎたら 0（終了）にする', () => {
+    expect(replayCountdownValue(5000)).toBe(0);
+    expect(replayCountdownValue(9000)).toBe(0);
+  });
+
+  it('秒数を変えても同じように数える（reduced-motion でも 5 秒のまま）', () => {
+    expect(replayCountdownValue(0, 5)).toBe(5);
+    expect(replayCountdownValue(4000, 5)).toBe(1);
+    expect(replayCountdownValue(5000, 5)).toBe(0);
   });
 });
 

@@ -1,54 +1,34 @@
 import { useEffect, useState } from 'react';
 
-import { useBeginReplayGame } from '../../api/generated/api';
-import {
-  REPLAY_BEGIN_COUNTDOWN_SECONDS,
-  REPLAY_NETWORK_ERROR_MESSAGE,
-  replayErrorMessage,
-  type ReplaySession,
-} from '../../lib/replay';
-import { unlockReplayAudio } from '../../lib/replayAudio';
+import type { ReplaySession } from '../../lib/replay';
 import styles from '../../pages/ReplayPage.module.css';
 
-// 開始演出を見たことを覚えておくキー（#126 REPLAY-9）。2 回目以降は短くする。
+// 開始演出を見たことを覚えておくキー（#126 REPLAY-9）。2 回目以降は年・新聞を短くする。
 const REPLAY_INTRO_SEEN_KEY = 'fxgame.replayIntroSeen';
 // 初回の「20XX年」を出しておく時間（ミリ秒）。押すまで待つのは新聞の画面から。
 const REPLAY_YEAR_DISPLAY_MS = 1600;
 
 interface ReplayIntroProps {
   session: ReplaySession;
-  // カウントダウンが終わった（またはスキップされた）ときに呼ぶ。
-  onBegun: () => void;
+  // 「取引開始」を押したときに呼ぶ。カウントダウンと begin は親（ReplayPage）が行う。
+  onStart: () => void;
+  // begin の通信中かどうか（押した直後は最前面のカウントダウンが出る）。
+  starting: boolean;
+  // begin に失敗したときのメッセージ。
+  error: string | null;
 }
 
-// ReplayIntro は「暗転 → 年 → 新聞 → 取引開始 → 3・2・1」の開始演出（#126 REPLAY-9）。
+// ReplayIntro は「暗転 → 年 → 新聞 →『取引開始』」の開始演出（#126 REPLAY-9）。
 // 年は開始 API の応答（session.started.startYear）から出せるため、begin の前に流せる。
-// 「取引開始」を押すまでサーバーの時間は動かない（ボタンを押してから begin を呼ぶ）。
-export default function ReplayIntro({ session, onBegun }: ReplayIntroProps) {
+// 「取引開始」を押すまでサーバーの時間は動かない（押してから親が begin を呼ぶ）。
+// カウントダウン（5 秒）は ReplayCountdown が担当する（#138 REPLAY-13）。
+export default function ReplayIntro({ session, onStart, starting, error }: ReplayIntroProps) {
   // 初回かどうか・動きを減らす設定かどうかは初回レンダーで決める。
   const [isRepeat] = useState(readIntroSeen);
   const [reducedMotion] = useState(prefersReducedMotion);
 
   // 初回だけ「年」の画面を自動で出す。2 回目以降・reduced-motion では新聞から始める。
   const [showYear, setShowYear] = useState(() => !isRepeat && !reducedMotion);
-  const [countdown, setCountdown] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const beginMutation = useBeginReplayGame({
-    fetch: { headers: { Authorization: `Bearer ${session.token}` } },
-    mutation: {
-      onSuccess: (res) => {
-        if (res.status !== 200) {
-          setError(replayErrorMessage(res, '取引を開始できませんでした'));
-          return;
-        }
-        markIntroSeen();
-        // 2 回目以降・reduced-motion はカウントダウンを 1 つだけにする（短く）。
-        setCountdown(isRepeat || reducedMotion ? 1 : REPLAY_BEGIN_COUNTDOWN_SECONDS);
-      },
-      onError: () => setError(REPLAY_NETWORK_ERROR_MESSAGE),
-    },
-  });
 
   // 初回の「年」は一定時間で新聞に切り替える。スキップでも同じ新聞へ。
   useEffect(() => {
@@ -56,43 +36,6 @@ export default function ReplayIntro({ session, onBegun }: ReplayIntroProps) {
     const timer = window.setTimeout(() => setShowYear(false), REPLAY_YEAR_DISPLAY_MS);
     return () => window.clearTimeout(timer);
   }, [showYear]);
-
-  // サーバーは begin の時刻 + 3 秒から時間を動かす。画面のカウントダウンも同じ長さにする。
-  useEffect(() => {
-    if (countdown == null) return;
-    const timer = window.setTimeout(() => {
-      if (countdown <= 1) {
-        onBegun();
-      } else {
-        setCountdown(countdown - 1);
-      }
-    }, 1000);
-    return () => window.clearTimeout(timer);
-  }, [countdown, onBegun]);
-
-  function begin() {
-    if (beginMutation.isPending) return;
-    // 自動再生制限があるため、AudioContext はこのクリックの中で開始する（#129 REPLAY-12）。
-    unlockReplayAudio();
-    setError(null);
-    beginMutation.mutate({ gameId: session.gameId });
-  }
-
-  if (countdown != null) {
-    return (
-      <main className={`${styles.intro} ${styles.introDark}`}>
-        <div className={styles.countdown}>
-          <p className={styles.countdownLabel}>まもなく取引開始</p>
-          <p className={styles.countdownNumber} role="status" aria-live="assertive">
-            {countdown}
-          </p>
-          <button type="button" className={styles.introSkip} onClick={onBegun}>
-            スキップ
-          </button>
-        </div>
-      </main>
-    );
-  }
 
   if (showYear) {
     return (
@@ -134,13 +77,8 @@ export default function ReplayIntro({ session, onBegun }: ReplayIntroProps) {
         )}
 
         <div className={styles.actions}>
-          <button
-            type="button"
-            className={styles.primary}
-            onClick={begin}
-            disabled={beginMutation.isPending}
-          >
-            {beginMutation.isPending ? '開始しています...' : '取引開始'}
+          <button type="button" className={styles.primary} onClick={onStart} disabled={starting}>
+            {starting ? '開始しています...' : '取引開始'}
           </button>
           <a className={styles.secondaryLink} href="/replay/ranking">
             ランキングを見る
@@ -161,7 +99,8 @@ function readIntroSeen(): boolean {
 }
 
 // markIntroSeen は開始演出を見たことを記録する（失敗しても遊べるように握りつぶす）。
-function markIntroSeen() {
+// カウントダウンは毎回 5 秒だが、年・新聞の演出は 2 回目以降に短くする（#126）。
+export function markIntroSeen() {
   try {
     window.localStorage.setItem(REPLAY_INTRO_SEEN_KEY, '1');
   } catch {

@@ -8,8 +8,9 @@ import type { ReplayCandle, ReplayGameStarted } from '../api/generated/model';
 export const REPLAY_STANDARD_DAY_SECONDS = 3;
 
 // 「取引開始」から時間が動き始めるまでのカウントダウン（秒）。サーバーが begin の時刻 +
-// この秒数を started_at にする（design.md §13。#126 REPLAY-9）。
-export const REPLAY_BEGIN_COUNTDOWN_SECONDS = 3;
+// この秒数を started_at にする（design.md §13。#126 REPLAY-9・#138 REPLAY-13）。
+// 2 回目以降や reduced-motion でもこの秒数は変えない。
+export const REPLAY_BEGIN_COUNTDOWN_SECONDS = 5;
 
 // 1 ゲームの区間の営業日数（design.md §13「対象と期間」）。
 export const REPLAY_INTERVAL_DAYS = 60;
@@ -104,6 +105,67 @@ export function validateGuestName(name: string): string | null {
 // 数値への変換はせず、入力の検証だけを行う。
 export function isPositiveIntegerString(value: string): boolean {
   return /^[1-9][0-9]*$/.test(value.trim());
+}
+
+// 注文の入力で使う刻み（#138 REPLAY-13）。押すたびに現在値へ足し、1〜上限に丸める。
+export const REPLAY_MARGIN_STEPS = [-1000, -500, -100, 100, 500, 1000] as const;
+export const REPLAY_LEVERAGE_STEPS = [-10, -5, -1, 1, 5, 10] as const;
+
+// replayIntegerPart は decimal 文字列の整数部だけを取り出す（表示用の上限計算）。
+// 金額そのものの計算には使わない（CLAUDE.md §5.2）。負値・小数部は切り捨てる。
+function replayIntegerPart(value: string): number {
+  const match = /^([0-9]+)/.exec(value.trim());
+  if (!match) return 0;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// replayMaxMargin は注文に使える証拠金の上限（現在の資金の整数部）を返す。
+// 証拠金は整数で扱うため、資金が小数でもその整数部までにする。
+export function replayMaxMargin(funds: string): number {
+  return replayIntegerPart(funds);
+}
+
+// canReplayOrder は注文の操作を有効にしてよいかを返す。資金が 1 未満なら注文できない。
+export function canReplayOrder(funds: string): boolean {
+  return replayMaxMargin(funds) >= 1;
+}
+
+// clampReplayMargin は証拠金を 1〜現在の資金（整数部）に丸める（#138 REPLAY-13）。
+export function clampReplayMargin(value: string, funds: string): number {
+  const max = Math.max(1, replayMaxMargin(funds));
+  const current = replayIntegerPart(value);
+  return Math.min(Math.max(current, 1), max);
+}
+
+// clampReplayLeverage はレバレッジを 1〜現在の上限に丸める（#138 REPLAY-13）。
+export function clampReplayLeverage(value: string, maxLeverage: string): number {
+  const max = Math.max(1, replayIntegerPart(maxLeverage));
+  const current = replayIntegerPart(value);
+  return Math.min(Math.max(current, 1), max);
+}
+
+// stepReplayMargin / stepReplayLeverage は刻みボタンの次の値を返す（文字列のまま）。
+export function stepReplayMargin(value: string, delta: number, funds: string): string {
+  const current = clampReplayMargin(value, funds);
+  return String(clampReplayMargin(String(current + delta), funds));
+}
+
+export function stepReplayLeverage(value: string, delta: number, maxLeverage: string): string {
+  const current = clampReplayLeverage(value, maxLeverage);
+  return String(clampReplayLeverage(String(current + delta), maxLeverage));
+}
+
+// replayCountdownValue はカウントダウン開始から elapsedMs 経過したときに表示する数字を返す。
+// 5 秒なら 5・4・3・2・1、5 秒を過ぎたら 0（終了）。reduced-motion でも秒数は変えない
+// （#138 REPLAY-13）。負の値や不正な値は開始直後として扱う。
+export function replayCountdownValue(
+  elapsedMs: number,
+  seconds: number = REPLAY_BEGIN_COUNTDOWN_SECONDS,
+): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return seconds;
+  const remaining = seconds - Math.floor(elapsedMs / 1000);
+  return remaining > 0 ? remaining : 0;
 }
 
 // replayDayLabel は日足の通し番号を表示用のラベルにする。
