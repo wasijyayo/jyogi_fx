@@ -38,6 +38,9 @@ const (
 	replayPreDays = 20
 	// replayStandardDayDuration は標準の速さ（×1）で 1 営業日を公開する間隔（§13「1 ゲームの流れ」）。
 	replayStandardDayDuration = 3 * time.Second
+	// replayBeginCountdown は「取引開始」から時間が動き始めるまでの猶予（#126 REPLAY-9）。
+	// begin は started_at を「現在時刻 + この値」にし、画面はその間 3・2・1 を出す。
+	replayBeginCountdown = 3 * time.Second
 	// replayLeverageUnlockBaseCost は上限解放 1 段目の費用（§13。以降は段ごとに 2 倍）。
 	replayLeverageUnlockBaseCost = 250
 	// replayLeverageUnlockStep は上限解放 1 段あたりの +レバレッジ（§13）。
@@ -52,6 +55,9 @@ const (
 
 // ゲーム・建玉の状態。replay_games.status / replay_positions.status の値と一致させる。
 const (
+	// replayStatusReady はゲームを作成した直後の状態（#126 REPLAY-9）。時間はまだ動かず、
+	// 注文などの操作も受け付けない。begin で playing になる。
+	replayStatusReady         = "ready"
 	replayStatusPlaying       = "playing"
 	replayStatusFinished      = "finished"
 	replayStatusEarlyFinished = "early_finished"
@@ -71,6 +77,9 @@ var (
 	ErrReplayInvalidGuestName = errors.New("guest name must be 1-16 characters")
 	// ErrReplayGameFinished は終了済みゲームに対して操作した場合に返る。
 	ErrReplayGameFinished = errors.New("replay game already finished")
+	// ErrReplayGameNotStarted は ready（「取引開始」前）のゲームに対して操作した場合に返る
+	// （#126 REPLAY-9）。
+	ErrReplayGameNotStarted = errors.New("replay game has not started yet")
 	// ErrReplayInvalidMargin は証拠金が 1 以上の整数でない場合に返る。
 	ErrReplayInvalidMargin = errors.New("margin must be a positive integer")
 	// ErrReplayInvalidLeverage はレバレッジが 1 以上の整数でない場合に返る。
@@ -514,7 +523,9 @@ func hashReplayToken(token string) string {
 
 // ---- ゲーム開始 ----
 
-// StartGame は 1 ゲームを開始し、ゲームトークンを発行する（#103 REPLAY-3）。
+// StartGame は 1 ゲームを準備し、ゲームトークンを発行する（#103 REPLAY-3 / #126 REPLAY-9）。
+// 作成直後の status は ready で、時間はまだ動かない。区間・開始年・日足はこの時点で確定し、
+// 画面に開始年を出せる。プレイヤーが「取引開始」を押すと BeginGame で playing になる。
 // userID が非空ならログインユーザー、空ならゲスト名（前後の空白を除いて 1〜16 文字）を必須とする。
 func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string) (ReplayStartResult, error) {
 	now := s.clock.Now()
@@ -552,6 +563,7 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		TokenHash: hashReplayToken(token),
 		UserID:    playerUserID,
 		GuestName: playerGuestName,
+		// ready の間は時間が動かない。begin で「その時刻 + 3 秒」に上書きする（#126）。
 		StartedAt: pgtype.Timestamptz{Time: now, Valid: true},
 		StartYear: int32(days[replayPreDays].Year()),
 		Funds:     decimal.NewFromInt(replayInitialFunds),
@@ -560,19 +572,23 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		return ReplayStartResult{}, fmt.Errorf("create replay game: %w", err)
 	}
 
+	// 80 営業日分の日付を 1 回の COPY で入れる（#126 REPLAY-9。以前は 1 行ずつ INSERT していた）。
+	dayParams := make([]db.CreateReplayGameDaysParams, len(days))
 	for i, date := range days {
-		if err := q.CreateReplayGameDay(ctx, db.CreateReplayGameDayParams{
+		dayParams[i] = db.CreateReplayGameDaysParams{
 			GameID:   game.ID,
 			DayIndex: int32(i),
 			Date:     pgtype.Date{Time: date, Valid: true},
-		}); err != nil {
-			return ReplayStartResult{}, fmt.Errorf("create replay game day: %w", err)
 		}
+	}
+	if _, err := q.CreateReplayGameDays(ctx, dayParams); err != nil {
+		return ReplayStartResult{}, fmt.Errorf("create replay game days: %w", err)
 	}
 
 	// 80 日 × 全ペアの日足の行を開始時に記録する。以降の約定・強制決済・状態取得は
 	// この行（daily_rate_id）経由で読むため、後からデータセットが増えても値が変わらない。
 	ratesByPair := make(map[int64]map[int32]db.DailyRate, len(pairs))
+	rateParams := make([]db.CreateReplayGameRatesParams, 0, len(pairs)*len(days))
 	for _, p := range pairs {
 		byDate := ratesByDate[p.ID]
 		byDay := make(map[int32]db.DailyRate, len(days))
@@ -581,17 +597,18 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 			if !ok {
 				return ReplayStartResult{}, fmt.Errorf("effective daily rate missing for %s on %s", p.Symbol, date.Format("2006-01-02"))
 			}
-			if err := q.CreateReplayGameRate(ctx, db.CreateReplayGameRateParams{
+			rateParams = append(rateParams, db.CreateReplayGameRatesParams{
 				GameID:      game.ID,
 				PairID:      p.ID,
 				DayIndex:    int32(i),
 				DailyRateID: r.ID,
-			}); err != nil {
-				return ReplayStartResult{}, fmt.Errorf("create replay game rate: %w", err)
-			}
+			})
 			byDay[int32(i)] = r
 		}
 		ratesByPair[p.ID] = byDay
+	}
+	if _, err := q.CreateReplayGameRates(ctx, rateParams); err != nil {
+		return ReplayStartResult{}, fmt.Errorf("create replay game rates: %w", err)
 	}
 
 	// 開始時のレスポンス（開始前 20 日の日足を含む）。
@@ -625,6 +642,61 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		Pairs:         pairsInfo,
 		Candles:       candles,
 	}, nil
+}
+
+// BeginGame は「取引開始」を押したときに、ゲームを ready から playing にする
+// （#126 REPLAY-9）。started_at は「そのときの時刻 + 3 秒」にし、その 3 秒は画面の
+// カウントダウンに使う。時刻は Clock から取る（CLAUDE.md §5.1）。
+//
+// すでに playing のゲームに対して呼ばれた場合は開始時刻を変えず、現在の状態を返す
+// （二重押しでスタートがずれないようにする）。終了済みなら ErrReplayGameFinished。
+func (s *ReplayService) BeginGame(ctx context.Context, token string, gameID int64) (ReplayState, error) {
+	now := s.clock.Now()
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ReplayState{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := db.New(tx)
+
+	game, err := s.getGameForUpdate(ctx, q, token, gameID)
+	if err != nil {
+		return ReplayState{}, err
+	}
+
+	switch game.Status {
+	case replayStatusReady:
+		game, err = q.BeginReplayGame(ctx, db.BeginReplayGameParams{
+			ID:        game.ID,
+			StartedAt: pgtype.Timestamptz{Time: now.Add(replayBeginCountdown), Valid: true},
+		})
+		if err != nil {
+			return ReplayState{}, fmt.Errorf("begin replay game: %w", err)
+		}
+	case replayStatusPlaying:
+		// すでに開始済み。開始時刻は変えずに現在の状態を返す（冪等）。
+	default:
+		return ReplayState{}, ErrReplayGameFinished
+	}
+
+	c, err := loadReplayCtx(ctx, q, game.ID)
+	if err != nil {
+		return ReplayState{}, err
+	}
+	game, published, err := s.advance(ctx, q, game, c, now)
+	if err != nil {
+		return ReplayState{}, err
+	}
+	state, err := s.buildState(ctx, q, game, c, published)
+	if err != nil {
+		return ReplayState{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ReplayState{}, fmt.Errorf("commit tx: %w", err)
+	}
+	return state, nil
 }
 
 // selectInterval は区間（開始前 20 日 + 区間 60 日の計 80 営業日）を選ぶ。
@@ -733,6 +805,12 @@ func buildReplayCandles(pairs []db.CurrencyPair, ratesByPair map[int64]map[int32
 // 順番は「公開済みの日までの強制決済」→「終了していれば確定」→「早期終了の判定」。
 // 呼び出し側はゲームの行をロック済みであること。公開済み区間営業日数（0..60）を返す。
 func (s *ReplayService) advance(ctx context.Context, q *db.Queries, game db.ReplayGame, c *replayCtx, now time.Time) (db.ReplayGame, int, error) {
+	// ready の間は時間が動かない（#126 REPLAY-9）。started_at は begin まで仮の値なので、
+	// 経過時間から公開日数を計算しない。
+	if game.Status == replayStatusReady {
+		return game, 0, nil
+	}
+
 	changes, err := q.ListReplaySpeedChanges(ctx, game.ID)
 	if err != nil {
 		return game, 0, fmt.Errorf("list speed changes: %w", err)
@@ -1075,7 +1153,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		})
 	}
 
-	finished := game.Status != replayStatusPlaying
+	finished := game.Status == replayStatusFinished || game.Status == replayStatusEarlyFinished
 	days := make([]time.Time, len(c.days))
 	for _, d := range c.days {
 		days[d.DayIndex] = d.Date.Time
@@ -1206,7 +1284,7 @@ func (s *ReplayService) PlaceOrder(ctx context.Context, token string, gameID int
 		return ReplayOrderResult{}, err
 	}
 	if game.Status != replayStatusPlaying {
-		return ReplayOrderResult{}, ErrReplayGameFinished
+		return ReplayOrderResult{}, replayNotPlayingError(game.Status)
 	}
 
 	pair, ok := c.pairByID[p.PairID]
@@ -1330,7 +1408,7 @@ func (s *ReplayService) ClosePosition(ctx context.Context, token string, gameID,
 		return ReplayCloseResult{}, err
 	}
 	if game.Status != replayStatusPlaying {
-		return ReplayCloseResult{}, ErrReplayGameFinished
+		return ReplayCloseResult{}, replayNotPlayingError(game.Status)
 	}
 
 	pos, err := q.GetReplayPositionForUpdate(ctx, db.GetReplayPositionForUpdateParams{
@@ -1423,7 +1501,7 @@ func (s *ReplayService) AddMargin(ctx context.Context, token string, gameID, pos
 		return ReplayAddMarginResult{}, err
 	}
 	if game.Status != replayStatusPlaying {
-		return ReplayAddMarginResult{}, ErrReplayGameFinished
+		return ReplayAddMarginResult{}, replayNotPlayingError(game.Status)
 	}
 
 	pos, err := q.GetReplayPositionForUpdate(ctx, db.GetReplayPositionForUpdateParams{
@@ -1503,7 +1581,7 @@ func (s *ReplayService) UnlockLeverage(ctx context.Context, token string, gameID
 		return ReplayUnlockLeverageResult{}, err
 	}
 	if game.Status != replayStatusPlaying {
-		return ReplayUnlockLeverageResult{}, ErrReplayGameFinished
+		return ReplayUnlockLeverageResult{}, replayNotPlayingError(game.Status)
 	}
 
 	pair, ok := c.pairByID[pairID]
@@ -1595,7 +1673,7 @@ func (s *ReplayService) ChangeSpeed(ctx context.Context, token string, gameID in
 		return ReplayChangeSpeedResult{}, err
 	}
 	if game.Status != replayStatusPlaying {
-		return ReplayChangeSpeedResult{}, ErrReplayGameFinished
+		return ReplayChangeSpeedResult{}, replayNotPlayingError(game.Status)
 	}
 
 	if err := q.CreateReplaySpeedChange(ctx, db.CreateReplaySpeedChangeParams{
@@ -1612,6 +1690,15 @@ func (s *ReplayService) ChangeSpeed(ctx context.Context, token string, gameID in
 
 	// 変更は今この瞬間から有効なので、この時点の公開済み日数は変わらない。
 	return ReplayChangeSpeedResult{Speed: speed, PublishedDays: published}, nil
+}
+
+// replayNotPlayingError は playing 以外のゲームへの操作に返すエラーを選ぶ（#126 REPLAY-9）。
+// ready なら「まだ開始していない」、それ以外（終了済み）なら「終了済み」を返す。
+func replayNotPlayingError(status string) error {
+	if status == replayStatusReady {
+		return ErrReplayGameNotStarted
+	}
+	return ErrReplayGameFinished
 }
 
 // isPositiveInteger は d が 1 以上の整数かを返す（証拠金・レバレッジ・追加額の検証）。

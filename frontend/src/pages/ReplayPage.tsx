@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -13,6 +13,7 @@ import {
 } from '../api/generated/api';
 import type { ReplayPosition } from '../api/generated/model';
 import ReplayChart from '../components/replay/ReplayChart';
+import ReplayIntro from '../components/replay/ReplayIntro';
 import ReplayResult from '../components/replay/ReplayResult';
 import ReplayStart from '../components/replay/ReplayStart';
 import { formatPrice, formatSide, formatSignedPrice } from '../lib/format';
@@ -34,17 +35,36 @@ import styles from './ReplayPage.module.css';
 
 // ReplayPage は過去チャートモード（design.md §13）の入口。ゲームトークンは React の
 // state だけで保持する（再読み込みでゲームは失われる。#105 で決めたこと）。
+// 開始 API のあとに開始演出（#126 REPLAY-9）を挟み、「取引開始」で初めて時間が動く。
 export default function ReplayPage() {
   const [session, setSession] = useState<ReplaySession | null>(null);
+  const [begun, setBegun] = useState(false);
+
+  const onBegun = useCallback(() => setBegun(true), []);
 
   if (session == null) {
-    return <ReplayStart onStarted={setSession} />;
+    return (
+      <ReplayStart
+        onStarted={(startedSession) => {
+          setBegun(false);
+          setSession(startedSession);
+        }}
+      />
+    );
   }
+
+  if (!begun) {
+    return <ReplayIntro session={session} onBegun={onBegun} />;
+  }
+
   return (
     <ReplayGame
       key={session.gameId}
       session={session}
-      onPlayAgain={() => setSession(null)}
+      onPlayAgain={() => {
+        setBegun(false);
+        setSession(null);
+      }}
     />
   );
 }

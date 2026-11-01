@@ -195,6 +195,55 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 	auth := "Bearer " + started.Token
 	usdID := pairIDForSymbol(t, pairs, "USD/JPY")
 
+	// begin 前（ready）は日足が公開されておらず、注文も受け付けない（#126 REPLAY-9）。
+	stReady := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/replay/games/"+itoa(started.GameId), nil)
+	req.Header.Set("Authorization", auth)
+	mux.ServeHTTP(stReady, req)
+	if stReady.Code != http.StatusOK {
+		t.Fatalf("ready state status = %d, body=%s", stReady.Code, stReady.Body.String())
+	}
+	var readyState struct {
+		Status        string `json:"status"`
+		PublishedDays int    `json:"publishedDays"`
+	}
+	if err := json.Unmarshal(stReady.Body.Bytes(), &readyState); err != nil {
+		t.Fatalf("decode ready state: %v", err)
+	}
+	if readyState.Status != "ready" || readyState.PublishedDays != 0 {
+		t.Errorf("ready state = %+v, want status ready / publishedDays 0", readyState)
+	}
+	orderBefore := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/replay/games/"+itoa(started.GameId)+"/orders",
+		strings.NewReader(`{"pairId":`+itoa(usdID)+`,"side":"long","margin":"100","leverage":"10"}`))
+	req.Header.Set("Authorization", auth)
+	mux.ServeHTTP(orderBefore, req)
+	if orderBefore.Code != http.StatusConflict {
+		t.Errorf("order before begin status = %d, want 409 (body=%s)", orderBefore.Code, orderBefore.Body.String())
+	}
+
+	// 取引開始（begin）。status が playing になり、時間が動き始める。
+	begin := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/replay/games/"+itoa(started.GameId)+"/begin", nil)
+	req.Header.Set("Authorization", auth)
+	mux.ServeHTTP(begin, req)
+	if begin.Code != http.StatusOK {
+		t.Fatalf("begin status = %d, body=%s", begin.Code, begin.Body.String())
+	}
+	if datePattern.MatchString(begin.Body.String()) {
+		t.Errorf("begin response contains a date string: %s", begin.Body.String())
+	}
+	var begunState struct {
+		Status        string `json:"status"`
+		PublishedDays int    `json:"publishedDays"`
+	}
+	if err := json.Unmarshal(begin.Body.Bytes(), &begunState); err != nil {
+		t.Fatalf("decode begin: %v", err)
+	}
+	if begunState.Status != "playing" || begunState.PublishedDays != 0 {
+		t.Errorf("begin state = %+v, want status playing / publishedDays 0", begunState)
+	}
+
 	// 状態取得（経過 0 秒 = 公開済み 0 日）。
 	st := httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/replay/games/"+itoa(started.GameId), nil)
