@@ -4,6 +4,7 @@ import Header from './components/Header';
 import CurrencyListPage from './pages/CurrencyListPage';
 import CurrencyPage from './pages/CurrencyPage';
 import ReplayPage from './pages/ReplayPage';
+import ReplayRankingPage from './pages/ReplayRankingPage';
 import TradePage from './pages/TradePage';
 import DemoPage from './demo/DemoPage';
 
@@ -51,7 +52,21 @@ const replayRoute = createRoute({
   component: ReplayPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute, demoRoute, replayRoute]);
+// 過去チャートモードのランキング（#105）。
+const replayRankingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/replay/ranking',
+  component: ReplayRankingPage,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  currencyRoute,
+  tradeRoute,
+  demoRoute,
+  replayRoute,
+  replayRankingRoute,
+]);
 
 export const router = createRouter({ routeTree });
 

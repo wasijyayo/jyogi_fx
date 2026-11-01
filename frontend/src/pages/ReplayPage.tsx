@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import {
   getGetReplayGameStateQueryKey,
+  getGetReplayRankingQueryKey,
   useAddReplayMargin,
   useChangeReplaySpeed,
   useCloseReplayPosition,
@@ -12,6 +13,7 @@ import {
 } from '../api/generated/api';
 import type { ReplayPosition } from '../api/generated/model';
 import ReplayChart from '../components/replay/ReplayChart';
+import ReplayResult from '../components/replay/ReplayResult';
 import ReplayStart from '../components/replay/ReplayStart';
 import { formatPrice, formatSide, formatSignedPrice } from '../lib/format';
 import {
@@ -82,6 +84,12 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
   const state = stateQuery.data?.status === 200 ? stateQuery.data.data : undefined;
   const finished = state != null && isReplayFinishedStatus(state.status);
 
+  // 結果画面に進んだら、ランキングのクエリを無効化して取り直す。
+  useEffect(() => {
+    if (!finished) return;
+    void queryClient.invalidateQueries({ queryKey: getGetReplayRankingQueryKey() });
+  }, [finished, queryClient]);
+
   useEffect(() => {
     setUnlockConfirming(false);
   }, [selectedPairId]);
@@ -148,21 +156,7 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
   }
 
   if (finished) {
-    return (
-      <main className={styles.main}>
-        <section className={styles.result} role="status">
-          <h1 className={styles.title}>ゲーム終了</h1>
-          <p className={styles.scoreLabel}>スコア（最終資金）</p>
-          <p className={styles.score}>{formatPrice(state.finalFunds ?? state.funds)}</p>
-          <div className={styles.actions}>
-            <button type="button" className={styles.primary} onClick={onPlayAgain}>
-              もう一度遊ぶ
-            </button>
-          </div>
-          <p className={styles.source}>出典: EV Trading Labs</p>
-        </section>
-      </main>
-    );
+    return <ReplayResult state={state} onPlayAgain={onPlayAgain} />;
   }
 
   const selectedPair =
