@@ -221,14 +221,22 @@ export function formatReplayInterval(
   return `${formatReplayDate(start)}〜${formatReplayDate(end)}`;
 }
 
+// サーバーの英語メッセージのうち、画面では日本語で見せたいもの（#140 REPLAY-14）。
+// ゲームルール自体はサーバー側のままで、表示だけを置き換える。
+const REPLAY_ERROR_MESSAGES: Record<string, string> = {
+  'close existing positions of this pair first':
+    'このペアには反対の向きの建玉があります。先に決済してください',
+};
+
 // replayErrorMessage は API のエラー応答から表示用のメッセージを取り出す。
-// サーバーが返したメッセージ（例: 反対方向の建玉がある）をそのまま画面に出す。
+// サーバーが返したメッセージを画面に出す。既知の英語メッセージだけ日本語にする。
 export function replayErrorMessage(
   res: { status: number; data: unknown } | undefined,
   fallback: string,
 ): string {
   const message = (res?.data as { message?: string } | null | undefined)?.message;
-  return message ?? fallback;
+  if (message == null) return fallback;
+  return REPLAY_ERROR_MESSAGES[message] ?? message;
 }
 
 function trimZero(value: string): string {
