@@ -18,6 +18,7 @@ import ReplayStart from '../components/replay/ReplayStart';
 import { formatPrice, formatSide, formatSignedPrice } from '../lib/format';
 import {
   REPLAY_INTERVAL_DAYS,
+  REPLAY_NETWORK_ERROR_MESSAGE,
   REPLAY_SPEEDS,
   formatRemainingTime,
   isPositiveIntegerString,
@@ -107,25 +108,44 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
     setActionError(replayErrorMessage(res, fallback));
   }
 
+  function onActionError() {
+    setActionError(REPLAY_NETWORK_ERROR_MESSAGE);
+  }
+
   const orderMutation = usePlaceReplayOrder({
     fetch: authFetch,
-    mutation: { onSuccess: (res) => onActionResult(res, '注文できませんでした') },
+    mutation: {
+      onSuccess: (res) => onActionResult(res, '注文できませんでした'),
+      onError: onActionError,
+    },
   });
   const closeMutation = useCloseReplayPosition({
     fetch: authFetch,
-    mutation: { onSuccess: (res) => onActionResult(res, '決済できませんでした') },
+    mutation: {
+      onSuccess: (res) => onActionResult(res, '決済できませんでした'),
+      onError: onActionError,
+    },
   });
   const marginMutation = useAddReplayMargin({
     fetch: authFetch,
-    mutation: { onSuccess: (res) => onActionResult(res, '証拠金を追加できませんでした') },
+    mutation: {
+      onSuccess: (res) => onActionResult(res, '証拠金を追加できませんでした'),
+      onError: onActionError,
+    },
   });
   const unlockMutation = useUnlockReplayLeverage({
     fetch: authFetch,
-    mutation: { onSuccess: (res) => onActionResult(res, '上限を解放できませんでした') },
+    mutation: {
+      onSuccess: (res) => onActionResult(res, '上限を解放できませんでした'),
+      onError: onActionError,
+    },
   });
   const speedMutation = useChangeReplaySpeed({
     fetch: authFetch,
-    mutation: { onSuccess: (res) => onActionResult(res, '速さを変更できませんでした') },
+    mutation: {
+      onSuccess: (res) => onActionResult(res, '速さを変更できませんでした'),
+      onError: onActionError,
+    },
   });
 
   if (state == null) {
@@ -411,6 +431,16 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
           <div>
             <dt>資金</dt>
             <dd>{formatPrice(state.funds)}</dd>
+          </div>
+          <div>
+            <dt>含み損益（合計）</dt>
+            <dd
+              className={
+                state.totalUnrealizedPnl.startsWith('-') ? styles.loss : styles.profit
+              }
+            >
+              {formatSignedPrice(state.totalUnrealizedPnl)}
+            </dd>
           </div>
           <div>
             <dt>含み損益（建玉ごと）</dt>

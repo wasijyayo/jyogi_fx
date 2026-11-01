@@ -489,22 +489,30 @@ func TestReplay_StateNextUnlockAndUnrealizedPnl(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("place order: %v", err)
 	}
+	// 同じペア・同じ向きでもう 1 件持つ（合計の確認用）。
+	if _, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: usd.ID, Side: SideLong, Margin: dec("50"), Leverage: dec("10"),
+	}); err != nil {
+		t.Fatalf("place order 2: %v", err)
+	}
 
-	// 1 日進めると最新の終値が 102 になり、含み損益 = 1000 × (102-100)/100 = 20。
+	// 1 日進めると最新の終値が 102 になり、含み損益は
+	// 1000 × (102-100)/100 = 20 と 500 × (102-100)/100 = 10 の合計 30。
 	clock.now = clock.now.Add(3 * time.Second)
 	state, err := svc.GetState(ctx, res.Token, res.GameID)
 	if err != nil {
 		t.Fatalf("GetState: %v", err)
 	}
-	if len(state.Positions) != 1 {
-		t.Fatalf("open positions = %d, want 1", len(state.Positions))
+	if len(state.Positions) != 2 {
+		t.Fatalf("open positions = %d, want 2", len(state.Positions))
 	}
-	pos := state.Positions[0]
-	if pos.UnrealizedPnl == nil {
-		t.Fatal("unrealizedPnl is nil")
+	for _, pos := range state.Positions {
+		if pos.UnrealizedPnl == nil {
+			t.Fatalf("unrealizedPnl is nil for position %d", pos.ID)
+		}
 	}
-	if !pos.UnrealizedPnl.Equal(dec("20")) {
-		t.Errorf("unrealizedPnl = %s, want 20", pos.UnrealizedPnl)
+	if !state.TotalUnrealizedPnl.Equal(dec("30")) {
+		t.Errorf("totalUnrealizedPnl = %s, want 30", state.TotalUnrealizedPnl)
 	}
 
 	// 1 段解放したら、次の段の上限・費用が 1 段進む。

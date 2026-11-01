@@ -250,12 +250,16 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 		t.Fatalf("state after order status = %d, body=%s", st.Code, st.Body.String())
 	}
 	var stateAfterOrder struct {
-		Positions []struct {
+		TotalUnrealizedPnl string `json:"totalUnrealizedPnl"`
+		Positions          []struct {
 			UnrealizedPnl *string `json:"unrealizedPnl"`
 		} `json:"positions"`
 	}
 	if err := json.Unmarshal(st.Body.Bytes(), &stateAfterOrder); err != nil {
 		t.Fatalf("decode state after order: %v", err)
+	}
+	if stateAfterOrder.TotalUnrealizedPnl != "0" {
+		t.Errorf("totalUnrealizedPnl = %q, want 0", stateAfterOrder.TotalUnrealizedPnl)
 	}
 	if len(stateAfterOrder.Positions) != 1 {
 		t.Fatalf("open positions = %d, want 1", len(stateAfterOrder.Positions))

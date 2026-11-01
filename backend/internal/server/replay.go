@@ -345,15 +345,16 @@ func replayPositionsToAPI(ps []game.ReplayPositionView) []apigen.ReplayPosition 
 
 func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 	out := apigen.ReplayGameState{
-		GameId:        s.GameID,
-		Status:        s.Status,
-		StartYear:     s.StartYear,
-		Funds:         s.Funds.String(),
-		Speed:         s.Speed,
-		PublishedDays: s.PublishedDays,
-		Pairs:         replayPairsToAPI(s.Pairs),
-		Positions:     replayPositionsToAPI(s.Positions),
-		CandlesByPair: replayPairCandlesToAPI(s.Candles),
+		GameId:             s.GameID,
+		Status:             s.Status,
+		StartYear:          s.StartYear,
+		Funds:              s.Funds.String(),
+		Speed:              s.Speed,
+		PublishedDays:      s.PublishedDays,
+		Pairs:              replayPairsToAPI(s.Pairs),
+		Positions:          replayPositionsToAPI(s.Positions),
+		CandlesByPair:      replayPairCandlesToAPI(s.Candles),
+		TotalUnrealizedPnl: s.TotalUnrealizedPnl.String(),
 	}
 	if s.IntervalStart != nil {
 		out.IntervalStart = &openapiTypes.Date{Time: *s.IntervalStart}

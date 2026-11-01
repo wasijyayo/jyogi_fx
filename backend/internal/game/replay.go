@@ -393,6 +393,8 @@ type ReplayState struct {
 	Pairs         []ReplayPair
 	Positions     []ReplayPositionView
 	Candles       []ReplayPairCandles
+	// TotalUnrealizedPnl は未決済建玉の含み損益の合計（建玉が無ければ 0）。
+	TotalUnrealizedPnl decimal.Decimal
 	// 以下は終了後にのみセット（先読み対策で終了前は nil）。
 	IntervalStart *time.Time
 	IntervalEnd   *time.Time
@@ -1089,6 +1091,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		return ReplayState{}, fmt.Errorf("list open positions: %w", err)
 	}
 	posViews := make([]ReplayPositionView, 0, len(positions))
+	totalUnrealized := decimal.Zero
 	for _, pos := range positions {
 		view := replayPositionView(pos, c.pairByID[pos.PairID].Symbol)
 		// 含み損益は公開済みの最新の終値で計算する（design.md §13 の損益式）。
@@ -1096,6 +1099,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 			notional := replayNotional(pos.InitialMargin, pos.Leverage)
 			pnl := replayPnL(Side(pos.Side), pos.EntryPrice, rate.Close, notional)
 			view.UnrealizedPnl = &pnl
+			totalUnrealized = totalUnrealized.Add(pnl)
 		}
 		posViews = append(posViews, view)
 	}
@@ -1103,15 +1107,16 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 	candles := buildReplayCandles(c.pairs, c.ratesByPair, days, 0, currentDay, finished)
 
 	state := ReplayState{
-		GameID:        game.ID,
-		Status:        game.Status,
-		StartYear:     int(game.StartYear),
-		Funds:         game.Funds,
-		Speed:         speed,
-		PublishedDays: published,
-		Pairs:         pairs,
-		Positions:     posViews,
-		Candles:       candles,
+		GameID:             game.ID,
+		Status:             game.Status,
+		StartYear:          int(game.StartYear),
+		Funds:              game.Funds,
+		Speed:              speed,
+		PublishedDays:      published,
+		Pairs:              pairs,
+		Positions:          posViews,
+		Candles:            candles,
+		TotalUnrealizedPnl: totalUnrealized,
 	}
 
 	if finished {

@@ -24,6 +24,9 @@ export interface ReplaySession {
   started: ReplayGameStarted;
 }
 
+// 通信に失敗したときに画面へ出す共通メッセージ。
+export const REPLAY_NETWORK_ERROR_MESSAGE = '通信に失敗しました。もう一度お試しください';
+
 // isReplayFinishedStatus は結果画面へ進む status かを返す。
 // 早期終了の判定はサーバーが行い、フロントでは status を見るだけにする。
 export function isReplayFinishedStatus(status: string): boolean {

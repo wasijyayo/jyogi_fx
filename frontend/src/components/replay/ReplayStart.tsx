@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { useGetMe, useStartReplayGame } from '../../api/generated/api';
-import { replayErrorMessage, validateGuestName, type ReplaySession } from '../../lib/replay';
+import { replayErrorMessage, REPLAY_NETWORK_ERROR_MESSAGE, validateGuestName, type ReplaySession } from '../../lib/replay';
 import styles from '../../pages/ReplayPage.module.css';
 
 interface ReplayStartProps {
@@ -27,6 +27,7 @@ export default function ReplayStart({ onStarted }: ReplayStartProps) {
         setError(null);
         onStarted({ gameId: res.data.gameId, token: res.data.token, started: res.data });
       },
+      onError: () => setError(REPLAY_NETWORK_ERROR_MESSAGE),
     },
   });
 

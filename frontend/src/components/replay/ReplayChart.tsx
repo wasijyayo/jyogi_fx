@@ -12,7 +12,7 @@ import {
 } from 'lightweight-charts';
 
 import type { ReplayCandle, ReplayPosition } from '../../api/generated/model';
-import { replayDayLabel, replayPricePrecision } from '../../lib/replay';
+import { REPLAY_PRE_DAYS, replayDayLabel, replayPricePrecision } from '../../lib/replay';
 import styles from '../../pages/ReplayPage.module.css';
 
 interface ReplayChartProps {
@@ -21,6 +21,10 @@ interface ReplayChartProps {
   // 選択中のペアの未決済建玉。強制決済ラインを引く。
   positions: ReplayPosition[];
 }
+
+// 開始前 20 日は灰色系にして、区間の日足と描き分ける（デモの DemoChart と同じ考え方）。
+const PRE_OPEN_BODY_COLOR = '#b0bec5';
+const PRE_OPEN_WICK_COLOR = '#90a4ae';
 
 // 日付は終了まで伏せるため、通し番号を秒に見立てて時間軸に使う（デモと同じ考え方）。
 const DAY_SECONDS = 86_400;
@@ -94,6 +98,13 @@ export default function ReplayChart({ candles, positions }: ReplayChartProps) {
         high: Number(c.high),
         low: Number(c.low),
         close: Number(c.close),
+        ...(c.day < REPLAY_PRE_DAYS
+          ? {
+              color: PRE_OPEN_BODY_COLOR,
+              borderColor: PRE_OPEN_WICK_COLOR,
+              wickColor: PRE_OPEN_WICK_COLOR,
+            }
+          : {}),
       })),
     );
 
