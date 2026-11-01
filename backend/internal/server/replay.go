@@ -262,11 +262,13 @@ func writeReplayError(w http.ResponseWriter, err error) {
 
 func replayPairToAPI(p game.ReplayPair) apigen.ReplayPair {
 	return apigen.ReplayPair{
-		PairId:       p.PairID,
-		Symbol:       p.Symbol,
-		BaseLeverage: p.BaseLeverage.String(),
-		MaxLeverage:  p.MaxLeverage.String(),
-		FeeRate:      p.FeeRate.String(),
+		PairId:             p.PairID,
+		Symbol:             p.Symbol,
+		BaseLeverage:       p.BaseLeverage.String(),
+		MaxLeverage:        p.MaxLeverage.String(),
+		FeeRate:            p.FeeRate.String(),
+		NextUnlockLeverage: p.NextUnlockLeverage.String(),
+		NextUnlockCost:     p.NextUnlockCost.String(),
 	}
 }
 
@@ -326,6 +328,10 @@ func replayPositionToAPI(p game.ReplayPositionView) apigen.ReplayPosition {
 		v := p.Pnl.String()
 		out.Pnl = &v
 	}
+	if p.UnrealizedPnl != nil {
+		v := p.UnrealizedPnl.String()
+		out.UnrealizedPnl = &v
+	}
 	return out
 }
 
@@ -339,15 +345,16 @@ func replayPositionsToAPI(ps []game.ReplayPositionView) []apigen.ReplayPosition 
 
 func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 	out := apigen.ReplayGameState{
-		GameId:        s.GameID,
-		Status:        s.Status,
-		StartYear:     s.StartYear,
-		Funds:         s.Funds.String(),
-		Speed:         s.Speed,
-		PublishedDays: s.PublishedDays,
-		Pairs:         replayPairsToAPI(s.Pairs),
-		Positions:     replayPositionsToAPI(s.Positions),
-		CandlesByPair: replayPairCandlesToAPI(s.Candles),
+		GameId:             s.GameID,
+		Status:             s.Status,
+		StartYear:          s.StartYear,
+		Funds:              s.Funds.String(),
+		Speed:              s.Speed,
+		PublishedDays:      s.PublishedDays,
+		Pairs:              replayPairsToAPI(s.Pairs),
+		Positions:          replayPositionsToAPI(s.Positions),
+		CandlesByPair:      replayPairCandlesToAPI(s.Candles),
+		TotalUnrealizedPnl: s.TotalUnrealizedPnl.String(),
 	}
 	if s.IntervalStart != nil {
 		out.IntervalStart = &openapiTypes.Date{Time: *s.IntervalStart}

@@ -449,6 +449,96 @@ func TestReplay_AddMargin(t *testing.T) {
 	}
 }
 
+// TestReplay_StateNextUnlockAndUnrealizedPnl は状態取得で「次の段の上限・費用」と
+// 未決済建玉の含み損益（公開済みの最新の終値）が返ることを確認する（#105）。
+func TestReplay_StateNextUnlockAndUnrealizedPnl(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	dates := replayTestDates(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
+	// 開始前 20 日は 100、区間の 1 日目以降は 102 で終値が動く。
+	bar := func(_ string, day int) (string, string, string, string) {
+		close := "100"
+		if day >= 20 {
+			close = "102"
+		}
+		return "100", "103", "99", close
+	}
+	pairs := insertReplayData(t, ctx, pool, dates, bar)
+
+	clock := &replayTestClock{now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}
+	svc := newReplayServiceForTest(pool, clock)
+
+	res, err := svc.StartGame(ctx, "", "tester")
+	if err != nil {
+		t.Fatalf("StartGame: %v", err)
+	}
+	for _, p := range res.Pairs {
+		if !p.NextUnlockLeverage.Equal(p.MaxLeverage.Add(dec("10"))) {
+			t.Errorf("%s next unlock leverage = %s, want %s", p.Symbol, p.NextUnlockLeverage, p.MaxLeverage.Add(dec("10")))
+		}
+		if !p.NextUnlockCost.Equal(dec("250")) {
+			t.Errorf("%s next unlock cost = %s, want 250", p.Symbol, p.NextUnlockCost)
+		}
+	}
+
+	usd := pairBySymbol(t, pairs, "USD/JPY")
+	if _, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: usd.ID, Side: SideLong, Margin: dec("100"), Leverage: dec("10"),
+	}); err != nil {
+		t.Fatalf("place order: %v", err)
+	}
+	// 同じペア・同じ向きでもう 1 件持つ（合計の確認用）。
+	if _, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: usd.ID, Side: SideLong, Margin: dec("50"), Leverage: dec("10"),
+	}); err != nil {
+		t.Fatalf("place order 2: %v", err)
+	}
+
+	// 1 日進めると最新の終値が 102 になり、含み損益は
+	// 1000 × (102-100)/100 = 20 と 500 × (102-100)/100 = 10 の合計 30。
+	clock.now = clock.now.Add(3 * time.Second)
+	state, err := svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if len(state.Positions) != 2 {
+		t.Fatalf("open positions = %d, want 2", len(state.Positions))
+	}
+	for _, pos := range state.Positions {
+		if pos.UnrealizedPnl == nil {
+			t.Fatalf("unrealizedPnl is nil for position %d", pos.ID)
+		}
+	}
+	if !state.TotalUnrealizedPnl.Equal(dec("30")) {
+		t.Errorf("totalUnrealizedPnl = %s, want 30", state.TotalUnrealizedPnl)
+	}
+
+	// 1 段解放したら、次の段の上限・費用が 1 段進む。
+	if _, err := svc.UnlockLeverage(ctx, res.Token, res.GameID, usd.ID); err != nil {
+		t.Fatalf("UnlockLeverage: %v", err)
+	}
+	state, err = svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState(after unlock): %v", err)
+	}
+	for _, p := range state.Pairs {
+		if p.PairID != usd.ID {
+			continue
+		}
+		if !p.MaxLeverage.Equal(dec("35")) {
+			t.Errorf("maxLeverage = %s, want 35", p.MaxLeverage)
+		}
+		if !p.NextUnlockLeverage.Equal(dec("45")) {
+			t.Errorf("next unlock leverage = %s, want 45", p.NextUnlockLeverage)
+		}
+		if !p.NextUnlockCost.Equal(dec("500")) {
+			t.Errorf("next unlock cost = %s, want 500", p.NextUnlockCost)
+		}
+	}
+}
+
 // TestReplay_LeverageUnlock は上限解放の費用が 250 → 500 とペアごとに数えられることを確認する。
 func TestReplay_LeverageUnlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

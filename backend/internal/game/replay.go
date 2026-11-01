@@ -257,6 +257,17 @@ func replayUnlockCost(tier int) decimal.Decimal {
 		Mul(decimal.NewFromInt(2).Pow(decimal.NewFromInt(int64(tier))))
 }
 
+// replayNextUnlock は現在の解放段数から、次の段を解放した後のレバレッジ上限と
+// その費用を返す（design.md §13）。現在の上限 = 初期上限 + tier × 10 なので、
+// 次の上限は +10、費用は tier 段目の費用（250 → 500 → …）。
+func replayNextUnlock(baseMaxLeverage decimal.Decimal, tier int32) (nextLeverage, cost decimal.Decimal) {
+	nextLeverage = baseMaxLeverage.Add(
+		decimal.NewFromInt(int64(tier) + 1).Mul(decimal.NewFromInt(replayLeverageUnlockStep)),
+	)
+	cost = replayUnlockCost(int(tier))
+	return nextLeverage, cost
+}
+
 // minOrderCost は「最低注文額と新規手数料を払える最小の注文」の費用（早期終了判定に使う）。
 // 最低証拠金 1 × 最低レバレッジ 1 の取引規模 1 に対する手数料率が最小のペアで計算する。
 func minOrderCost(pairs []db.CurrencyPair) decimal.Decimal {
@@ -328,6 +339,10 @@ type ReplayPair struct {
 	BaseLeverage decimal.Decimal
 	MaxLeverage  decimal.Decimal
 	FeeRate      decimal.Decimal
+	// NextUnlockLeverage / NextUnlockCost は次の段を解放した後の上限と費用
+	// （画面で「次の段の倍率と費用」を確認するために使う。design.md §13）。
+	NextUnlockLeverage decimal.Decimal
+	NextUnlockCost     decimal.Decimal
 }
 
 // ReplayCandle は公開済みの日足 1 本（終了前は日付を持たない）。
@@ -362,6 +377,9 @@ type ReplayPositionView struct {
 	Status          string
 	ClosePrice      *decimal.Decimal
 	Pnl             *decimal.Decimal
+	// UnrealizedPnl は未決済建玉の含み損益（公開済みの最新の終値で計算）。
+	// 入力 API の結果など、価格を渡していない場面では nil。
+	UnrealizedPnl *decimal.Decimal
 }
 
 // ReplayState はゲーム状態の取得結果。
@@ -375,6 +393,8 @@ type ReplayState struct {
 	Pairs         []ReplayPair
 	Positions     []ReplayPositionView
 	Candles       []ReplayPairCandles
+	// TotalUnrealizedPnl は未決済建玉の含み損益の合計（建玉が無ければ 0）。
+	TotalUnrealizedPnl decimal.Decimal
 	// 以下は終了後にのみセット（先読み対策で終了前は nil）。
 	IntervalStart *time.Time
 	IntervalEnd   *time.Time
@@ -577,12 +597,15 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 	// 開始時のレスポンス（開始前 20 日の日足を含む）。
 	pairsInfo := make([]ReplayPair, 0, len(pairs))
 	for _, p := range pairs {
+		nextLev, nextCost := replayNextUnlock(p.MaxLeverage, 0)
 		pairsInfo = append(pairsInfo, ReplayPair{
-			PairID:       p.ID,
-			Symbol:       p.Symbol,
-			BaseLeverage: p.MaxLeverage,
-			MaxLeverage:  p.MaxLeverage,
-			FeeRate:      p.FeeRate,
+			PairID:             p.ID,
+			Symbol:             p.Symbol,
+			BaseLeverage:       p.MaxLeverage,
+			MaxLeverage:        p.MaxLeverage,
+			FeeRate:            p.FeeRate,
+			NextUnlockLeverage: nextLev,
+			NextUnlockCost:     nextCost,
 		})
 	}
 
@@ -1038,23 +1061,18 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 
 	pairs := make([]ReplayPair, 0, len(c.pairs))
 	for _, p := range c.pairs {
-		maxLev := p.MaxLeverage.Add(decimal.NewFromInt(int64(unlockByPair[p.ID])).Mul(decimal.NewFromInt(replayLeverageUnlockStep)))
+		tier := unlockByPair[p.ID]
+		maxLev := p.MaxLeverage.Add(decimal.NewFromInt(int64(tier)).Mul(decimal.NewFromInt(replayLeverageUnlockStep)))
+		nextLev, nextCost := replayNextUnlock(p.MaxLeverage, tier)
 		pairs = append(pairs, ReplayPair{
-			PairID:       p.ID,
-			Symbol:       p.Symbol,
-			BaseLeverage: p.MaxLeverage,
-			MaxLeverage:  maxLev,
-			FeeRate:      p.FeeRate,
+			PairID:             p.ID,
+			Symbol:             p.Symbol,
+			BaseLeverage:       p.MaxLeverage,
+			MaxLeverage:        maxLev,
+			FeeRate:            p.FeeRate,
+			NextUnlockLeverage: nextLev,
+			NextUnlockCost:     nextCost,
 		})
-	}
-
-	positions, err := q.ListOpenReplayPositions(ctx, game.ID)
-	if err != nil {
-		return ReplayState{}, fmt.Errorf("list open positions: %w", err)
-	}
-	posViews := make([]ReplayPositionView, 0, len(positions))
-	for _, pos := range positions {
-		posViews = append(posViews, replayPositionView(pos, c.pairByID[pos.PairID].Symbol))
 	}
 
 	finished := game.Status != replayStatusPlaying
@@ -1067,18 +1085,38 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		// 終了後は全区間（80 日）を日付付きで返す（結果画面）。
 		currentDay = len(days) - 1
 	}
+
+	positions, err := q.ListOpenReplayPositions(ctx, game.ID)
+	if err != nil {
+		return ReplayState{}, fmt.Errorf("list open positions: %w", err)
+	}
+	posViews := make([]ReplayPositionView, 0, len(positions))
+	totalUnrealized := decimal.Zero
+	for _, pos := range positions {
+		view := replayPositionView(pos, c.pairByID[pos.PairID].Symbol)
+		// 含み損益は公開済みの最新の終値で計算する（design.md §13 の損益式）。
+		if rate, ok := c.rate(pos.PairID, int32(currentDay)); ok {
+			notional := replayNotional(pos.InitialMargin, pos.Leverage)
+			pnl := replayPnL(Side(pos.Side), pos.EntryPrice, rate.Close, notional)
+			view.UnrealizedPnl = &pnl
+			totalUnrealized = totalUnrealized.Add(pnl)
+		}
+		posViews = append(posViews, view)
+	}
+
 	candles := buildReplayCandles(c.pairs, c.ratesByPair, days, 0, currentDay, finished)
 
 	state := ReplayState{
-		GameID:        game.ID,
-		Status:        game.Status,
-		StartYear:     int(game.StartYear),
-		Funds:         game.Funds,
-		Speed:         speed,
-		PublishedDays: published,
-		Pairs:         pairs,
-		Positions:     posViews,
-		Candles:       candles,
+		GameID:             game.ID,
+		Status:             game.Status,
+		StartYear:          int(game.StartYear),
+		Funds:              game.Funds,
+		Speed:              speed,
+		PublishedDays:      published,
+		Pairs:              pairs,
+		Positions:          posViews,
+		Candles:            candles,
+		TotalUnrealizedPnl: totalUnrealized,
 	}
 
 	if finished {

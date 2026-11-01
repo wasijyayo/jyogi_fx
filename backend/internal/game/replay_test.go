@@ -138,6 +138,33 @@ func TestReplayUnlockCost(t *testing.T) {
 	}
 }
 
+// TestReplayNextUnlock は次の段の上限（+10 倍）と費用（250 → 500）を確認する。
+func TestReplayNextUnlock(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		tier     int32
+		wantLev  string
+		wantCost string
+	}{
+		{"初期上限25・未解放", "25", 0, "35", "250"},
+		{"初期上限30・未解放", "30", 0, "40", "250"},
+		{"初期上限25・1段解放済み", "25", 1, "45", "500"},
+		{"初期上限30・2段解放済み", "30", 2, "60", "1000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lev, cost := replayNextUnlock(dec(tt.base), tt.tier)
+			if !lev.Equal(dec(tt.wantLev)) {
+				t.Errorf("next leverage = %s, want %s", lev, tt.wantLev)
+			}
+			if !cost.Equal(dec(tt.wantCost)) {
+				t.Errorf("next cost = %s, want %s", cost, tt.wantCost)
+			}
+		})
+	}
+}
+
 // TestReplayNotional は取引規模 = 当初証拠金 × レバレッジを確認する。
 func TestReplayNotional(t *testing.T) {
 	got := replayNotional(dec("100"), 10)

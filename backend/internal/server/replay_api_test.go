@@ -164,6 +164,11 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 	}
 	// 開始レスポンスは開始前 20 日まで（day 0..19）。
 	var startedFull struct {
+		Pairs []struct {
+			PairId             int64  `json:"pairId"`
+			NextUnlockLeverage string `json:"nextUnlockLeverage"`
+			NextUnlockCost     string `json:"nextUnlockCost"`
+		} `json:"pairs"`
 		CandlesByPair []struct {
 			Candles []struct {
 				Day int `json:"day"`
@@ -172,6 +177,12 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 	}
 	if err := json.Unmarshal(start.Body.Bytes(), &startedFull); err != nil {
 		t.Fatalf("decode start candles: %v", err)
+	}
+	// #105: 次の段の上限・費用が開始時から返る。
+	for _, p := range startedFull.Pairs {
+		if p.NextUnlockLeverage == "" || p.NextUnlockCost == "" {
+			t.Errorf("pair %d has no next unlock info: %+v", p.PairId, p)
+		}
 	}
 	for _, pc := range startedFull.CandlesByPair {
 		for _, c := range pc.Candles {
@@ -228,6 +239,33 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 	}
 	if datePattern.MatchString(ord.Body.String()) {
 		t.Errorf("order response contains a date string: %s", ord.Body.String())
+	}
+
+	// #105: 状態取得の未決済建玉に含み損益が入る（公開済みの最新の終値で計算）。
+	st = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/replay/games/"+itoa(started.GameId), nil)
+	req.Header.Set("Authorization", auth)
+	mux.ServeHTTP(st, req)
+	if st.Code != http.StatusOK {
+		t.Fatalf("state after order status = %d, body=%s", st.Code, st.Body.String())
+	}
+	var stateAfterOrder struct {
+		TotalUnrealizedPnl string `json:"totalUnrealizedPnl"`
+		Positions          []struct {
+			UnrealizedPnl *string `json:"unrealizedPnl"`
+		} `json:"positions"`
+	}
+	if err := json.Unmarshal(st.Body.Bytes(), &stateAfterOrder); err != nil {
+		t.Fatalf("decode state after order: %v", err)
+	}
+	if stateAfterOrder.TotalUnrealizedPnl != "0" {
+		t.Errorf("totalUnrealizedPnl = %q, want 0", stateAfterOrder.TotalUnrealizedPnl)
+	}
+	if len(stateAfterOrder.Positions) != 1 {
+		t.Fatalf("open positions = %d, want 1", len(stateAfterOrder.Positions))
+	}
+	if stateAfterOrder.Positions[0].UnrealizedPnl == nil {
+		t.Error("unrealizedPnl is missing for an open position")
 	}
 }
 

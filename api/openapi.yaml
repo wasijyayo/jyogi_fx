@@ -857,6 +857,8 @@ components:
         - baseLeverage
         - maxLeverage
         - feeRate
+        - nextUnlockLeverage
+        - nextUnlockCost
       properties:
         pairId:
           type: integer
@@ -872,6 +874,12 @@ components:
         feeRate:
           type: string
           description: 片道手数料率（decimal文字列）
+        nextUnlockLeverage:
+          type: string
+          description: 次の段を解放した後のレバレッジ上限（decimal文字列）
+        nextUnlockCost:
+          type: string
+          description: 次の段の解放費用（decimal文字列）
 
     ReplayCandle:
       type: object
@@ -965,6 +973,10 @@ components:
           type: string
           nullable: true
           description: 損益（証拠金 × レバレッジ × 価格変化率。負値は損失）
+        unrealizedPnl:
+          type: string
+          nullable: true
+          description: 含み損益（公開済みの最新の終値で計算。未決済の建玉のみ。決済済みや他 API では null）
 
     ReplayGameState:
       type: object
@@ -978,6 +990,7 @@ components:
         - pairs
         - positions
         - candlesByPair
+        - totalUnrealizedPnl
       properties:
         gameId:
           type: integer
@@ -1001,6 +1014,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReplayPosition"
+        totalUnrealizedPnl:
+          type: string
+          description: 未決済建玉の含み損益の合計（decimal文字列。建玉が無ければ "0"）
         candlesByPair:
           type: array
           items:
