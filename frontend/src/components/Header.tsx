@@ -54,6 +54,9 @@ export default function Header() {
           <a href="/trade" className={styles.navLink}>
             取引
           </a>
+          <a href="/replay" className={styles.navLink}>
+            過去チャート
+          </a>
           <a href="/demo" className={styles.navLink}>
             デモ
           </a>

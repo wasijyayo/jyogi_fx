@@ -1,0 +1,606 @@
+.main {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 22px;
+}
+
+.loading {
+  padding: 16px;
+  color: #666;
+}
+
+.card {
+  padding: 14px 16px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+  min-width: 0;
+}
+
+.heading {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.sub {
+  margin: 0;
+  color: #666;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.eyebrow {
+  display: block;
+  color: #666;
+  font-size: 12px;
+}
+
+.error {
+  margin: 0;
+  color: #c62828;
+  font-size: 13px;
+}
+
+.note {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff8e1;
+  color: #6d4c00;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.source {
+  margin: 0;
+  color: #777;
+  font-size: 12px;
+  text-align: right;
+}
+
+/* モード選択 */
+.modeGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.modeCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-decoration: none;
+}
+
+.modeCard strong {
+  font-size: 16px;
+}
+
+.modeCardActive {
+  border: 2px solid #1e6fd9;
+  background: #f3f7fd;
+  padding: 13px;
+}
+
+.modeCardActive strong {
+  color: #1e6fd9;
+}
+
+/* 開始 */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0;
+  font-size: 13px;
+  color: #444;
+}
+
+.field input {
+  width: 100%;
+  max-width: 240px;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.loginName {
+  margin: 12px 0;
+  font-size: 15px;
+}
+
+.primary,
+.secondary,
+.toggle,
+.toggleActive {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.primary {
+  border: 1px solid #1e6fd9;
+  background: #1e6fd9;
+  color: #fff;
+  font-weight: 600;
+}
+
+.secondary,
+.toggle {
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #333;
+}
+
+.toggleActive {
+  border: 1px solid #1e6fd9;
+  background: #e8f0fc;
+  color: #1e6fd9;
+  font-weight: 600;
+}
+
+.primary:disabled,
+.secondary:disabled,
+.toggle:disabled,
+.toggleActive:disabled,
+.buy:disabled,
+.sell:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* プレイ画面の上部 */
+.topbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.year {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.yearValue {
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.progressText {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.progressBar {
+  height: 8px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  background: #eceff1;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: #1e6fd9;
+  transition: width 0.3s;
+}
+
+.speeds {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.speedButtons {
+  display: flex;
+  gap: 6px;
+}
+
+/* 通貨ペアの切り替え */
+.pairs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.pair,
+.pairActive {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pair {
+  border: 1px solid #e2e2e2;
+}
+
+.pairActive {
+  border: 2px solid #1e6fd9;
+  padding: 9px 11px;
+}
+
+.pairSymbol {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.pairPrice {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #1e6fd9;
+  color: #fff;
+  font-size: 11px;
+}
+
+/* チャートと注文 */
+.layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+
+.chart {
+  width: 100%;
+  height: 300px;
+}
+
+.lines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lineBadge {
+  padding: 2px 8px;
+  border: 1px dashed #e08e0b;
+  border-radius: 10px;
+  color: #8a5b00;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.orderButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.buy,
+.sell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.buy {
+  background: #26a69a;
+}
+
+.sell {
+  background: #ef5350;
+}
+
+.hint {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+/* 現在の状況 */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.summary dt {
+  color: #666;
+  font-size: 12px;
+}
+
+.summary dd {
+  margin: 2px 0 0;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.total dd {
+  font-weight: 700;
+}
+
+.profit {
+  color: #1b8a7e;
+}
+
+.loss {
+  color: #d32f2f;
+}
+
+/* 保有一覧 */
+.positions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.position {
+  display: grid;
+  grid-template-columns: 120px 1.4fr auto 1.2fr;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid #f0f0f0;
+}
+
+.position:first-child {
+  border-top: none;
+}
+
+.positionPair {
+  font-weight: 700;
+}
+
+.sideBuy,
+.sideSell {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.sideBuy {
+  background: #26a69a;
+}
+
+.sideSell {
+  background: #ef5350;
+}
+
+.positionDetail {
+  color: #555;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.positionProfit {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+
+.positionActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.marginForm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.marginForm input {
+  width: 76px;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* 上限解放の確認 */
+.confirm {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #f0c36d;
+  border-radius: 8px;
+  background: #fff8e1;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.confirm p {
+  margin: 0 0 8px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ランキング */
+.ranking {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rankingRow {
+  display: grid;
+  grid-template-columns: 32px 32px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid #f0f0f0;
+  font-size: 14px;
+}
+
+.rankingRow:first-child {
+  border-top: none;
+}
+
+.rank {
+  color: #666;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.avatar,
+.avatarFallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+
+.avatarFallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #eceff1;
+  color: #607d8b;
+  font-size: 12px;
+}
+
+.rankName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guestBadge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eceff1;
+  color: #607d8b;
+  font-size: 11px;
+}
+
+.rankFunds {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* 結果 */
+.result {
+  padding: 24px;
+  border: 2px solid #1e6fd9;
+  border-radius: 8px;
+  background: #f3f7fd;
+  text-align: center;
+}
+
+.result p {
+  margin: 0 0 10px;
+}
+
+.resultScore {
+  margin: 4px 0 12px;
+  font-size: 22px;
+}
+
+.resultScore strong {
+  font-size: 34px;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .speeds {
+    align-items: flex-start;
+  }
+
+  .pairs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chart {
+    height: 240px;
+  }
+
+  .summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .position {
+    grid-template-columns: 1fr auto;
+  }
+
+  .positionDetail {
+    grid-column: 1 / -1;
+  }
+
+  .positionProfit {
+    text-align: left;
+  }
+
+  .positionActions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+  }
+
+  .modeGrid {
+    grid-template-columns: 1fr;
+  }
+}

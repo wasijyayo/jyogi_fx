@@ -5,6 +5,7 @@ import CurrencyListPage from './pages/CurrencyListPage';
 import CurrencyPage from './pages/CurrencyPage';
 import TradePage from './pages/TradePage';
 import DemoPage from './demo/DemoPage';
+import ReplayPage from './replay/ReplayPage';
 
 // RootLayout は全画面共通のレイアウト（ヘッダー + 中身）。CLAUDE.md §2 の TanStack Router。
 function RootLayout() {
@@ -43,7 +44,14 @@ const demoRoute = createRoute({
   component: DemoPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute, demoRoute]);
+// 過去チャートモード（#105）。ログイン不要（ゲスト可）で 1 回 3 分。
+const replayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/replay',
+  component: ReplayPage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute, demoRoute, replayRoute]);
 
 export const router = createRouter({ routeTree });
 
