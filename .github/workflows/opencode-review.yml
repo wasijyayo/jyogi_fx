@@ -1,0 +1,70 @@
+name: OpenCode Review
+
+# PR code is fetched only as data. Never checkout or execute the head/merge ref
+# in this privileged workflow; scripts and configuration come from base.sha.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: opencode-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  opencode-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Decide whether to review
+        id: gate
+        env:
+          REVIEW_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          DISABLED: ${{ vars.OPENCODE_REVIEW_DISABLED }}
+        run: |
+          reason=$(node -e '
+            const e = require(process.env.GITHUB_EVENT_PATH);
+            const p = e.pull_request;
+            console.log(process.env.DISABLED === "true" ? "Disabled by repository variable" :
+              p.draft ? "Draft PR" :
+              p.head.repo.full_name !== process.env.GITHUB_REPOSITORY ? "Fork PR" :
+              p.user.login === "dependabot[bot]" ? "Dependabot PR" :
+              !process.env.REVIEW_KEY ? "OPENCODE_GO_API_KEY is not configured" : "");
+          ')
+          if [ -n "$reason" ]; then
+            echo "Review skipped: $reason" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout trusted base only
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Install pinned OpenCode CLI
+        if: steps.gate.outputs.run == 'true'
+        # No repository dependencies, install scripts, or PR configuration.
+        working-directory: ${{ runner.temp }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/review-cli" --ignore-scripts --no-audit --no-fund opencode-ai@1.19.5
+          node "$RUNNER_TEMP/review-cli/node_modules/opencode-ai/postinstall.mjs"
+          "$RUNNER_TEMP/review-cli/node_modules/.bin/opencode" --version
+
+      - name: Review diff and update dedicated comment
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_BIN: ${{ runner.temp }}/review-cli/node_modules/.bin/opencode
+        run: node scripts/opencode-review.mjs
+
+      - name: Explain execution failure
+        if: failure()
+        run: echo 'OpenCode Review failed. Check the failed step (installation, GitHub access, model authentication, quota, or timeout). Existing CI/Deploy/Preview are independent.' >> "$GITHUB_STEP_SUMMARY"
