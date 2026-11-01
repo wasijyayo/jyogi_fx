@@ -288,6 +288,10 @@ func TestReplay_FullGameToCompletion(t *testing.T) {
 	if state.PublishedDays != 1 {
 		t.Errorf("publishedDays = %d, want 1", state.PublishedDays)
 	}
+	// 次の 1 日は 3 秒後（#129 REPLAY-12）。
+	if state.MsUntilNextDay != 3000 {
+		t.Errorf("msUntilNextDay = %d, want 3000", state.MsUntilNextDay)
+	}
 	if state.IntervalStart != nil || state.IntervalEnd != nil || state.FinalFunds != nil {
 		t.Errorf("mid-game state leaks end info: %+v", state)
 	}
@@ -306,6 +310,10 @@ func TestReplay_FullGameToCompletion(t *testing.T) {
 	}
 	if state.PublishedDays != 60 {
 		t.Errorf("publishedDays = %d, want 60", state.PublishedDays)
+	}
+	// 終了後は次の日が無い（#129 REPLAY-12）。
+	if state.MsUntilNextDay != 0 {
+		t.Errorf("msUntilNextDay = %d, want 0", state.MsUntilNextDay)
 	}
 	if len(state.Positions) != 0 {
 		t.Errorf("final open positions = %d, want 0", len(state.Positions))

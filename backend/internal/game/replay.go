@@ -132,6 +132,20 @@ func NewReplayService(pool *pgxpool.Pool, clock Clock) *ReplayService {
 // （0..60）を返す（design.md §13 scale-to-zero）。速さは ×1 から始まり、変更履歴の
 // 時刻ごとに切り替わる。経過時間 × 速さ を区間ごとに足し合わせて 3 秒で割る。
 func replayPublishedDays(startedAt time.Time, changes []db.ReplaySpeedChange, now time.Time) int {
+	effective := replayEffectiveDuration(startedAt, changes, now)
+	days := int(effective / replayStandardDayDuration)
+	if days < 0 {
+		days = 0
+	}
+	if days > replayIntervalDays {
+		days = replayIntervalDays
+	}
+	return days
+}
+
+// replayEffectiveDuration は開始から now までの「速さを掛けた経過時間」を返す。
+// 速さの変更履歴を時刻順に足し合わせる（design.md §13）。開始前は 0。
+func replayEffectiveDuration(startedAt time.Time, changes []db.ReplaySpeedChange, now time.Time) time.Duration {
 	var effective time.Duration
 	speed := 1
 	from := startedAt
@@ -146,14 +160,33 @@ func replayPublishedDays(startedAt time.Time, changes []db.ReplaySpeedChange, no
 	if now.After(from) {
 		effective += now.Sub(from) * time.Duration(speed)
 	}
-	days := int(effective / replayStandardDayDuration)
-	if days < 0 {
-		days = 0
+	return effective
+}
+
+// replayMsUntilNextDay は次の営業日が公開されるまでのミリ秒を返す（#129 REPLAY-12）。
+// 状態取得の応答に載せ、画面が「次の 1 日が公開される時刻」に合わせて取り直せるようにする。
+// 60 日すべて公開済みなら 0。開始前（begin のカウントダウン中）は開始時刻までの待ちを
+// 足して返す（カウントダウン中は速さ ×1 のまま）。
+func replayMsUntilNextDay(startedAt time.Time, changes []db.ReplaySpeedChange, now time.Time) int64 {
+	published := replayPublishedDays(startedAt, changes, now)
+	if published >= replayIntervalDays {
+		return 0
 	}
-	if days > replayIntervalDays {
-		days = replayIntervalDays
+	target := time.Duration(published+1) * replayStandardDayDuration
+
+	if !now.After(startedAt) {
+		// 開始前は時間が動いていない。開始時刻 + 次の 1 日分（×1）を待つ。
+		return (startedAt.Sub(now) + target).Milliseconds()
 	}
-	return days
+
+	remaining := target - replayEffectiveDuration(startedAt, changes, now)
+	if remaining <= 0 {
+		return 0
+	}
+	speed := replayCurrentSpeed(changes)
+	// ミリ秒に切り上げる（次の日が公開される時刻を過ぎてから取りに行く）。
+	unit := time.Duration(speed) * time.Millisecond
+	return int64((remaining + unit - 1) / unit)
 }
 
 // replayCurrentSpeed は now 時点で有効な速さを返す（変更履歴の最後の値。無ければ ×1）。
@@ -495,8 +528,11 @@ type ReplayState struct {
 	Funds         decimal.Decimal
 	Speed         int
 	PublishedDays int
-	Pairs         []ReplayPair
-	Positions     []ReplayPositionView
+	// MsUntilNextDay は次の営業日が公開されるまでのミリ秒（#129 REPLAY-12）。
+	// ready・終了済み・60 日公開済みなら 0。
+	MsUntilNextDay int64
+	Pairs          []ReplayPair
+	Positions      []ReplayPositionView
 	// ClosedPositions は決済済み・強制決済済みの建玉（#127 REPLAY-10）。
 	ClosedPositions []ReplayPositionView
 	Candles         []ReplayPairCandles
@@ -814,7 +850,7 @@ func (s *ReplayService) BeginGame(ctx context.Context, token string, gameID int6
 	if err != nil {
 		return ReplayState{}, err
 	}
-	state, err := s.buildState(ctx, q, game, c, published)
+	state, err := s.buildState(ctx, q, game, c, published, now)
 	if err != nil {
 		return ReplayState{}, err
 	}
@@ -1235,7 +1271,7 @@ func (s *ReplayService) GetState(ctx context.Context, token string, gameID int64
 		return ReplayState{}, err
 	}
 
-	state, err := s.buildState(ctx, q, game, c, published)
+	state, err := s.buildState(ctx, q, game, c, published, now)
 	if err != nil {
 		return ReplayState{}, err
 	}
@@ -1247,7 +1283,7 @@ func (s *ReplayService) GetState(ctx context.Context, token string, gameID int64
 }
 
 // buildState はゲームの現在状態を組み立てる。
-func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.ReplayGame, c *replayCtx, published int) (ReplayState, error) {
+func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.ReplayGame, c *replayCtx, published int, now time.Time) (ReplayState, error) {
 	changes, err := q.ListReplaySpeedChanges(ctx, game.ID)
 	if err != nil {
 		return ReplayState{}, fmt.Errorf("list speed changes: %w", err)
@@ -1325,6 +1361,12 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 
 	candles := buildReplayCandles(c.pairs, c.ratesByPair, days, 0, currentDay, finished)
 
+	// 次の 1 日が公開されるまでの残り（#129 REPLAY-12）。ready・終了済みの間は 0。
+	var msUntilNextDay int64
+	if game.Status == replayStatusPlaying && published < replayIntervalDays {
+		msUntilNextDay = replayMsUntilNextDay(game.StartedAt.Time, changes, now)
+	}
+
 	state := ReplayState{
 		GameID:             game.ID,
 		Status:             game.Status,
@@ -1332,6 +1374,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		Funds:              game.Funds,
 		Speed:              speed,
 		PublishedDays:      published,
+		MsUntilNextDay:     msUntilNextDay,
 		Pairs:              pairs,
 		Positions:          posViews,
 		ClosedPositions:    closedViews,

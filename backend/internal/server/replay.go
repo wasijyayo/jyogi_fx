@@ -394,6 +394,7 @@ func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 		Funds:              s.Funds.String(),
 		Speed:              s.Speed,
 		PublishedDays:      s.PublishedDays,
+		MsUntilNextDay:     s.MsUntilNextDay,
 		Pairs:              replayPairsToAPI(s.Pairs),
 		Positions:          replayPositionsToAPI(s.Positions),
 		ClosedPositions:    replayPositionsToAPI(s.ClosedPositions),

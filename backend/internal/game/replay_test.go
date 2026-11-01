@@ -67,6 +67,67 @@ func TestReplayPublishedDays(t *testing.T) {
 	}
 }
 
+// TestReplayMsUntilNextDay は次の営業日までのミリ秒を返す純粋関数を確認する
+// （#129 REPLAY-12）。
+func TestReplayMsUntilNextDay(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		changes []db.ReplaySpeedChange
+		now     time.Time
+		want    int64
+	}{
+		{
+			name: "開始ちょうどは次の1日まで3秒",
+			now:  start,
+			want: 3000,
+		},
+		{
+			name: "開始から1秒後は残り2秒",
+			now:  start.Add(time.Second),
+			want: 2000,
+		},
+		{
+			name: "開始前は開始時刻までの待ちを足す",
+			now:  start.Add(-2 * time.Second),
+			want: 5000,
+		},
+		{
+			name: "1日公開直後は次の1日まで3秒",
+			now:  start.Add(3 * time.Second),
+			want: 3000,
+		},
+		{
+			name: "×2では残りが半分になる",
+			changes: []db.ReplaySpeedChange{
+				{ChangedAt: pgtype.Timestamptz{Time: start.Add(3 * time.Second), Valid: true}, Speed: 2},
+			},
+			// 3 秒 ×1 = 1 日（実効 3 秒）+ 1 秒 ×2 = 実効 5 秒。次の 2 日目まで実効 6 秒。
+			now:  start.Add(4 * time.Second),
+			want: 500,
+		},
+		{
+			name: "60日公開済みなら0",
+			now:  start.Add(180 * time.Second),
+			want: 0,
+		},
+		{
+			name: "60日を過ぎても0",
+			now:  start.Add(300 * time.Second),
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replayMsUntilNextDay(start, tt.changes, tt.now)
+			if got != tt.want {
+				t.Errorf("replayMsUntilNextDay = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestReplayLiquidationLine は強制決済ラインの計算を確認する（design.md §13）。
 func TestReplayLiquidationLine(t *testing.T) {
 	// 証拠金100・10倍（取引規模1000）の買い → 10% 下落でライン。

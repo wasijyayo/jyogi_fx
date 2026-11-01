@@ -7,6 +7,73 @@
   gap: 12px;
 }
 
+/* 強制決済の演出（#129 REPLAY-12）。画面を揺らして赤く点滅させる。
+   演出は見た目だけで、注文・決済の操作は止めない。 */
+.liquidating {
+  animation: liquidateShake 500ms ease-in-out;
+}
+
+.flashOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  background: #c62828;
+  opacity: 0;
+  animation: liquidateFlash 800ms ease-out forwards;
+}
+
+@keyframes liquidateShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-8px);
+  }
+  40% {
+    transform: translateX(7px);
+  }
+  60% {
+    transform: translateX(-5px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+@keyframes liquidateFlash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.32;
+  }
+  35% {
+    opacity: 0.05;
+  }
+  55% {
+    opacity: 0.26;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 動きを減らす設定では揺らさず、赤い枠と薄い赤で知らせる。 */
+@media (prefers-reduced-motion: reduce) {
+  .liquidating {
+    animation: none;
+    outline: 3px solid #c62828;
+    outline-offset: -3px;
+  }
+
+  .flashOverlay {
+    animation: none;
+    opacity: 0.18;
+  }
+}
+
 .title {
   margin: 0;
   font-size: 24px;
