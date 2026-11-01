@@ -60,6 +60,37 @@ export function replayPollIntervalMs(speed: number): number {
   return Math.max(1000, Math.floor((REPLAY_STANDARD_DAY_SECONDS * 1000) / safeSpeed));
 }
 
+// 状態取得を次の 1 日が公開された直後に合わせるための余白（ミリ秒）。
+// サーバーが計算した時刻は応答が届くまでに少し古くなるため、少し遅らせる（#129 REPLAY-12）。
+export const REPLAY_POLL_MARGIN_MS = 120;
+// 状態取得の最短間隔（ミリ秒）。境界をまたいだ直後に連打しないようにする。
+export const REPLAY_MIN_POLL_MS = 200;
+
+// replayPollDelayMs は次の状態取得までの待ち時間（ミリ秒）を返す。
+// サーバーが返した msUntilNextDay から、取得してから経過した時間を引いて
+// 「次の 1 日が公開される直後」に合わせる（#129 REPLAY-12）。msUntilNextDay が 0
+// （ready・終了済み）や極端に大きい場合は、速さから決まる通常の間隔に丸める。
+export function replayPollDelayMs(
+  msUntilNextDay: number,
+  elapsedMs: number,
+  speed: number,
+): number {
+  const fallback = replayPollIntervalMs(speed);
+  if (!Number.isFinite(msUntilNextDay) || msUntilNextDay <= 0) return fallback;
+  const remaining = msUntilNextDay - Math.max(0, elapsedMs);
+  const aligned = remaining + REPLAY_POLL_MARGIN_MS;
+  return Math.min(Math.max(REPLAY_MIN_POLL_MS, aligned), fallback + REPLAY_POLL_MARGIN_MS);
+}
+
+// isPositiveAmount は decimal 文字列が正の値かを返す（損益がプラスかの判定だけに使う）。
+// 数値に変換しない（表示用の符号判定。CLAUDE.md §5.2）。
+export function isPositiveAmount(value: string | null | undefined): boolean {
+  if (value == null) return false;
+  const v = value.trim();
+  if (v === '' || v.startsWith('-')) return false;
+  return !/^0*(?:\.0*)?$/.test(v);
+}
+
 // validateGuestName はゲスト名の入力チェック。前後の空白を除いて 1〜16 文字。
 // 問題なければ null、問題があれば画面に出すメッセージを返す。
 export function validateGuestName(name: string): string | null {

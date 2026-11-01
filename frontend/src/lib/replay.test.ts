@@ -3,14 +3,18 @@ import { describe, expect, it } from 'vitest';
 import type { ReplayCandle } from '../api/generated/model';
 import {
   REPLAY_INTERVAL_DAYS,
+  REPLAY_MIN_POLL_MS,
+  REPLAY_POLL_MARGIN_MS,
   formatRemainingTime,
   formatReplayDate,
   formatReplayInterval,
+  isPositiveAmount,
   isPositiveIntegerString,
   isReplayFinishedStatus,
   latestReplayClose,
   replayDayLabel,
   replayErrorMessage,
+  replayPollDelayMs,
   replayPollIntervalMs,
   replayPricePrecision,
   replayRemainingSeconds,
@@ -57,6 +61,40 @@ describe('replayPollIntervalMs', () => {
     expect(replayPollIntervalMs(2)).toBe(1500);
     expect(replayPollIntervalMs(3)).toBe(1000);
     expect(replayPollIntervalMs(0)).toBe(3000);
+  });
+});
+
+describe('replayPollDelayMs', () => {
+  it('次の日が公開される時刻に余白を足して取りに行く', () => {
+    expect(replayPollDelayMs(3000, 0, 1)).toBe(3000 + REPLAY_POLL_MARGIN_MS);
+    expect(replayPollDelayMs(1500, 500, 2)).toBe(1000 + REPLAY_POLL_MARGIN_MS);
+  });
+
+  it('取得してから時間が経っていれば待ち時間を短くする', () => {
+    expect(replayPollDelayMs(1000, 950, 3)).toBe(REPLAY_MIN_POLL_MS);
+  });
+
+  it('msUntilNextDay が 0 なら速さから決まる通常の間隔にする', () => {
+    expect(replayPollDelayMs(0, 0, 1)).toBe(3000);
+    expect(replayPollDelayMs(0, 0, 3)).toBe(1000);
+  });
+
+  it('通常の間隔より長くは待たない', () => {
+    expect(replayPollDelayMs(60_000, 0, 3)).toBe(1000 + REPLAY_POLL_MARGIN_MS);
+  });
+});
+
+describe('isPositiveAmount', () => {
+  it('正の decimal 文字列だけを true にする', () => {
+    expect(isPositiveAmount('1')).toBe(true);
+    expect(isPositiveAmount('12.34')).toBe(true);
+    expect(isPositiveAmount('0.00000001')).toBe(true);
+    expect(isPositiveAmount('0')).toBe(false);
+    expect(isPositiveAmount('0.00')).toBe(false);
+    expect(isPositiveAmount('-0.5')).toBe(false);
+    expect(isPositiveAmount('')).toBe(false);
+    expect(isPositiveAmount(null)).toBe(false);
+    expect(isPositiveAmount(undefined)).toBe(false);
   });
 });
 

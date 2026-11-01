@@ -7,6 +7,7 @@ import {
   replayErrorMessage,
   type ReplaySession,
 } from '../../lib/replay';
+import { unlockReplayAudio } from '../../lib/replayAudio';
 import styles from '../../pages/ReplayPage.module.css';
 
 // 開始演出を見たことを覚えておくキー（#126 REPLAY-9）。2 回目以降は短くする。
@@ -71,6 +72,8 @@ export default function ReplayIntro({ session, onBegun }: ReplayIntroProps) {
 
   function begin() {
     if (beginMutation.isPending) return;
+    // 自動再生制限があるため、AudioContext はこのクリックの中で開始する（#129 REPLAY-12）。
+    unlockReplayAudio();
     setError(null);
     beginMutation.mutate({ gameId: session.gameId });
   }

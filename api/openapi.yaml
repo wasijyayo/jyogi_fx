@@ -1081,6 +1081,7 @@ components:
         - funds
         - speed
         - publishedDays
+        - msUntilNextDay
         - pairs
         - positions
         - closedPositions
@@ -1101,6 +1102,13 @@ components:
           type: integer
         publishedDays:
           type: integer
+        msUntilNextDay:
+          type: integer
+          format: int64
+          description: |
+            次の営業日が公開されるまでのミリ秒（#129 REPLAY-12）。状態を取得した時点の
+            Clock を基準に、速さの変更履歴と速さを反映して計算する。ゲームが ready・終了済み、
+            または 60 日すべて公開済みなら 0。画面はこの値に合わせて次の状態取得を行う。
         pairs:
           type: array
           items:

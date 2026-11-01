@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -22,15 +23,17 @@ import {
   REPLAY_NETWORK_ERROR_MESSAGE,
   REPLAY_SPEEDS,
   formatRemainingTime,
+  isPositiveAmount,
   isPositiveIntegerString,
   isReplayFinishedStatus,
   latestReplayClose,
   replayDayLabel,
   replayErrorMessage,
-  replayPollIntervalMs,
+  replayPollDelayMs,
   replayRemainingSeconds,
   type ReplaySession,
 } from '../lib/replay';
+import { isReplayMuted, playReplayCoin, setReplayMuted } from '../lib/replayAudio';
 import styles from './ReplayPage.module.css';
 
 // ReplayPage は過去チャートモード（design.md §13）の入口。ゲームトークンは React の
@@ -88,15 +91,23 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
   const [marginInputs, setMarginInputs] = useState<Record<number, string>>({});
   const [orderMargin, setOrderMargin] = useState('100');
   const [orderLeverage, setOrderLeverage] = useState('1');
+  // 強制決済の演出（#129 REPLAY-12）。動きを止めず、注文の操作は妨げない。
+  const [liquidating, setLiquidating] = useState(false);
+  const [liquidationFlashKey, setLiquidationFlashKey] = useState(0);
+  // 決済済みの建玉のうち、すでに演出を見たもの。新しく決済されたものだけに演出を出す。
+  const seenClosedRef = useRef<Set<number> | null>(null);
+  // SE のミュート設定（localStorage に保存する）。
+  const [muted, setMuted] = useState(isReplayMuted);
 
   const stateQuery = useGetReplayGameState(gameId, {
     query: {
-      // 3 秒 ÷ 速さ 以下を目安にポーリングする（WebSocket は使わない）。終了後は止める。
+      // 次の 1 日が公開される時刻に合わせて取り直す（#129 REPLAY-12）。終了後は止める。
       refetchInterval: (query) => {
         const res = query.state.data;
         if (!res || res.status !== 200) return 1000;
         if (isReplayFinishedStatus(res.data.status)) return false;
-        return replayPollIntervalMs(res.data.speed);
+        const elapsed = Date.now() - query.state.dataUpdatedAt;
+        return replayPollDelayMs(res.data.msUntilNextDay, elapsed, res.data.speed);
       },
     },
     fetch: authFetch,
@@ -110,6 +121,45 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
     if (!finished) return;
     void queryClient.invalidateQueries({ queryKey: getGetReplayRankingQueryKey() });
   }, [finished, queryClient]);
+
+  // 新しく決済された建玉を見つけて、強制決済の演出と利益決済の SE を出す（#129 REPLAY-12）。
+  // 初回の取得は「すでに決済済みだったもの」として扱い、演出しない。
+  useEffect(() => {
+    if (state == null) return;
+    const seen = seenClosedRef.current;
+    if (seen == null) {
+      seenClosedRef.current = new Set(state.closedPositions.map((p) => p.id));
+      return;
+    }
+
+    let liquidated = false;
+    let profited = false;
+    for (const position of state.closedPositions) {
+      if (seen.has(position.id)) continue;
+      seen.add(position.id);
+      if (position.status === 'liquidated') liquidated = true;
+      if (isPositiveAmount(position.pnl)) profited = true;
+    }
+
+    if (liquidated) {
+      setLiquidating(true);
+      setLiquidationFlashKey((key) => key + 1);
+    }
+    if (profited) playReplayCoin();
+  }, [state]);
+
+  // 強制決済の演出は一定時間で消す。演出中も注文・決済の操作は止めない。
+  useEffect(() => {
+    if (!liquidating) return;
+    const timer = window.setTimeout(() => setLiquidating(false), 900);
+    return () => window.clearTimeout(timer);
+  }, [liquidating, liquidationFlashKey]);
+
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    setReplayMuted(next);
+  }
 
   useEffect(() => {
     setUnlockConfirming(false);
@@ -257,7 +307,12 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
   }
 
   return (
-    <main className={styles.main}>
+    <main className={`${styles.main} ${liquidating ? styles.liquidating : ''}`}>
+      {liquidating &&
+        createPortal(
+          <div key={liquidationFlashKey} className={styles.flashOverlay} aria-hidden="true" />,
+          document.body,
+        )}
       <section className={styles.status}>
         <div className={styles.era}>
           <span className={styles.eraLabel}>この相場の開始年</span>
@@ -277,7 +332,7 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
             />
           </div>
         </div>
-        <div className={styles.controls} aria-label="速さ">
+        <div className={styles.controls} aria-label="速さと音">
           {REPLAY_SPEEDS.map((speed) => (
             <button
               key={speed}
@@ -289,6 +344,15 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
               ×{speed}
             </button>
           ))}
+          <button
+            type="button"
+            className={styles.toggle}
+            onClick={toggleMute}
+            aria-pressed={muted}
+            title="利益が出た決済の効果音を鳴らすかどうか"
+          >
+            {muted ? '音を出す' : '音を消す'}
+          </button>
         </div>
       </section>
 
@@ -331,7 +395,11 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
             {selectedPair?.symbol ?? 'チャート'}{' '}
             <span className={styles.sub}>日足（1 本 = 1 営業日）</span>
           </h2>
-          <ReplayChart candles={selectedCandles} positions={selectedPositions} />
+          <ReplayChart
+            pairId={selectedPair?.pairId ?? 0}
+            candles={selectedCandles}
+            positions={selectedPositions}
+          />
           <p className={styles.sub}>
             薄い部分は開始前の 20 営業日です。価格はプレイヤーの売買では動きません。
           </p>
