@@ -60,6 +60,8 @@ describe('replayAudio のミュート設定', () => {
 // 生成したオシレーターの数（鳴らした音の数）を数える。AudioContext はモジュール内で
 // 使い回されるため、テストをまたいでも数えられるようファイル全体で共有する。
 let oscillatorCount = 0;
+// モジュール内で使い回されている偽 AudioContext。state をテストから変えるために持つ。
+let activeContext: FakeAudioContext | null = null;
 
 class FakeGainParam {
   value = 1;
@@ -92,6 +94,10 @@ class FakeAudioContext {
   destination = {} as AudioDestinationNode;
   resume = vi.fn(async () => undefined);
 
+  constructor() {
+    activeContext = this;
+  }
+
   createGain(): FakeGainNode {
     return new FakeGainNode();
   }
@@ -109,6 +115,11 @@ function installFakeAudioContext() {
   });
 }
 
+function runningContext(): FakeAudioContext {
+  if (activeContext == null) throw new Error('AudioContext が作成されていません');
+  return activeContext;
+}
+
 describe('replayAudio の SE と BGM', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -118,6 +129,8 @@ describe('replayAudio の SE と BGM', () => {
     oscillatorCount = 0;
     installFakeAudioContext();
     unlockReplayAudio();
+    // 前のテストの state を引き継がない（context はモジュール内で使い回される）。
+    runningContext().state = 'running';
   });
 
   afterEach(() => {
@@ -144,6 +157,24 @@ describe('replayAudio の SE と BGM', () => {
 
     stopReplayBgm();
     expect(isReplayBgmPlaying()).toBe(false);
+  });
+
+  it('AudioContext が suspended の間は BGM の音を予約しない', () => {
+    runningContext().state = 'suspended';
+
+    startReplayBgm();
+
+    expect(oscillatorCount).toBe(0);
+    vi.advanceTimersByTime(4000);
+    expect(oscillatorCount).toBe(0);
+  });
+
+  it('AudioContext が running なら BGM の音を予約する', () => {
+    runningContext().state = 'running';
+
+    startReplayBgm();
+
+    expect(oscillatorCount).toBeGreaterThan(0);
   });
 
   it('BGM を二重に開始しない', () => {

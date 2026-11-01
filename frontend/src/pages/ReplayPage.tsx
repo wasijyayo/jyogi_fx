@@ -270,7 +270,9 @@ function ReplayGame({ session, onPlayAgain, onLoaded, countdownDone }: ReplayGam
       seen.add(position.id);
       if (position.status === 'liquidated') liquidated = true;
       // 手動の決済は成功時に鳴らし済み。ここで鳴らすと二重になる（#140 REPLAY-14）。
+      // ここで鳴らす場合も建玉 ID を記録し、応答順序が逆でも onSuccess 側で二重に鳴らさない。
       if (isPositiveAmount(position.pnl) && !soundHandledRef.current.has(position.id)) {
+        soundHandledRef.current.add(position.id);
         profited = true;
       }
     }
@@ -342,13 +344,16 @@ function ReplayGame({ session, onPlayAgain, onLoaded, countdownDone }: ReplayGam
       onSuccess: (res) => {
         if (res.status === 200) {
           // 手動の決済が成功したときの SE。利益が出た決済は既存の利益の SE を鳴らし、
-          // 決済の SE とは二重に鳴らさない（#140 REPLAY-14）。状態の取り直しで同じ決済を
-          // もう一度鳴らさないよう、鳴らした建玉を覚えておく。
-          soundHandledRef.current.add(res.data.position.id);
-          if (isPositiveAmount(res.data.pnl)) {
-            playReplayCoin();
-          } else {
-            playReplaySettle();
+          // 決済の SE とは二重に鳴らさない（#140 REPLAY-14）。状態の取り直しが先に届いて
+          // effect 側で鳴らし済みなら、ここでは何も鳴らさない（応答順序で二重にならない）。
+          const positionId = res.data.position.id;
+          if (!soundHandledRef.current.has(positionId)) {
+            soundHandledRef.current.add(positionId);
+            if (isPositiveAmount(res.data.pnl)) {
+              playReplayCoin();
+            } else {
+              playReplaySettle();
+            }
           }
         }
         onActionResult(res, '決済できませんでした');

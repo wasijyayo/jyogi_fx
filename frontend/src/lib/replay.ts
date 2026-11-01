@@ -236,7 +236,12 @@ export function replayErrorMessage(
 ): string {
   const message = (res?.data as { message?: string } | null | undefined)?.message;
   if (message == null) return fallback;
-  return REPLAY_ERROR_MESSAGES[message] ?? message;
+  // 継承プロパティ（toString・constructor・__proto__ など）を翻訳結果として返さない。
+  // Object.prototype.hasOwnProperty で、翻訳表が自分で持つキーのときだけ置き換える。
+  if (Object.prototype.hasOwnProperty.call(REPLAY_ERROR_MESSAGES, message)) {
+    return REPLAY_ERROR_MESSAGES[message];
+  }
+  return message;
 }
 
 function trimZero(value: string): string {

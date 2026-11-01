@@ -180,6 +180,9 @@ function beginBgm(): void {
     master.connect(ctx.destination);
 
     const schedule = () => {
+      // AudioContext が一時停止中（suspended）は音を予約しない。再開後に次のフレーズから鳴らす。
+      // 自動再生制限などで再開できていない間に予約すると、時間が飛んで不自然になるため。
+      if (ctx.state !== 'running') return;
       try {
         scheduleBgmPhrase(ctx, master);
       } catch {

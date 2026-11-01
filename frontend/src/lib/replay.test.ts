@@ -243,6 +243,12 @@ describe('replayErrorMessage', () => {
     ).toBe('some other error');
   });
 
+  it('翻訳表の継承プロパティは翻訳結果として返さない', () => {
+    for (const message of ['toString', 'constructor', '__proto__']) {
+      expect(replayErrorMessage({ status: 409, data: { message } }, '失敗しました')).toBe(message);
+    }
+  });
+
   it('メッセージが無ければ fallback を返す', () => {
     expect(replayErrorMessage(undefined, '失敗しました')).toBe('失敗しました');
   });
