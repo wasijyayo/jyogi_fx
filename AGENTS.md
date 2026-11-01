@@ -27,7 +27,7 @@ AI エージェント（OpenCode など）向けの作業ルール。
   次のコマンドをそのまま実行する
   - `cd backend && go build ./... && go vet ./... && golangci-lint run ./... && ../scripts/with-issue-db.sh go test ./...`
   - フロントエンドを触った場合: `cd frontend && npm run gen && npm run build`
-- マイグレーションを追加した場合は、PR 本文に必ず明記する（本番への適用は人間が手動で行う）
+- マイグレーションを追加した場合は、PR 本文に必ず明記する（本番へは main へのマージ後に `deploy.yml` が自動で適用する。デプロイ前に適用されるので、1 つ前のコードが動く後方互換な変更にする）
 
 ## 生成物
 
