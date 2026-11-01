@@ -94,6 +94,15 @@ func TestReplayMsUntilNextDay(t *testing.T) {
 			want: 5000,
 		},
 		{
+			name: "開始前でも最初の1日までの待ちには速さを適用する",
+			changes: []db.ReplaySpeedChange{
+				{ChangedAt: pgtype.Timestamptz{Time: start.Add(-2 * time.Second), Valid: true}, Speed: 3},
+			},
+			// 開始まで 2 秒（そのまま）+ 最初の 1 日まで 3 秒 ÷ ×3 = 1 秒。
+			now:  start.Add(-2 * time.Second),
+			want: 3000,
+		},
+		{
 			name: "1日公開直後は次の1日まで3秒",
 			now:  start.Add(3 * time.Second),
 			want: 3000,

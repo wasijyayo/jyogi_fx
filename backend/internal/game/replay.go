@@ -175,8 +175,12 @@ func replayMsUntilNextDay(startedAt time.Time, changes []db.ReplaySpeedChange, n
 	target := time.Duration(published+1) * replayStandardDayDuration
 
 	if !now.After(startedAt) {
-		// 開始前は時間が動いていない。開始時刻 + 次の 1 日分（×1）を待つ。
-		return (startedAt.Sub(now) + target).Milliseconds()
+		// 開始前は時間が動いていない。開始時刻までの待ちはそのままにし、最初の 1 日分の
+		// 待ちには記録済みの速さを適用する（カウントダウン中に速さを変えた場合。#129）。
+		speed := replayCurrentSpeed(changes)
+		unit := time.Duration(speed) * time.Millisecond
+		dayWaitMs := int64((target + unit - 1) / unit)
+		return startedAt.Sub(now).Milliseconds() + dayWaitMs
 	}
 
 	remaining := target - replayEffectiveDuration(startedAt, changes, now)
