@@ -31,7 +31,7 @@
       "Bash(git push * -f*)",
       "Bash(git push *+*)",
       "Bash(git push * main)",
-      "Bash(git push * main:*)",
+      "Bash(git push *main*)",
       "Bash(git push *:main)",
       "Bash(git push * --delete *)",
       "Bash(git push * -d *)",
