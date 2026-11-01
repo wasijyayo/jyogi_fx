@@ -1281,3 +1281,63 @@ func TestReplay_RankingLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestReplay_RankingContinuesAfterFailedGame は、あるゲームの確定処理が失敗しても、
+// 残りの期限切れゲームが確定されることを確認する（CodeRabbit 指摘）。1 つの
+// トランザクションで全ゲームを処理していた旧実装では、失敗した時点で先行分も
+// ロールバックされていた。
+func TestReplay_RankingContinuesAfterFailedGame(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	gameIDs := make([]int64, 0, 2)
+	t.Cleanup(func() { cleanupReplayRankingRows(t, pool, gameIDs, nil) })
+
+	now := time.Date(2025, 6, 3, 12, 0, 0, 0, time.UTC)
+	clock := &replayTestClock{now: now}
+	svc := newReplayServiceForTest(pool, clock)
+
+	pairs := seededPairs(t, ctx, pool)
+
+	// 壊れたゲーム: 日足の記録が無いのに未決済建玉を持つ。時計が 60 日目を過ぎると
+	// 最終日の終値で決済できず、advance がエラーになる。開始時刻は他のランキングテストの
+	// 時計（2025-06-01 12:00）より後にして、他テストからは公開日数 0 のまま見えるようにする。
+	brokenID := insertPlayingReplayGame(t, ctx, pool, "rank-fail-broken", "broken", "900000061",
+		time.Date(2025, 6, 2, 12, 0, 0, 0, time.UTC))
+	gameIDs = append(gameIDs, brokenID)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO replay_positions (
+			game_id, pair_id, side, initial_margin, margin, leverage, entry_price, entry_day, status
+		) VALUES ($1, $2, 'long', 10, 10, 1, 100, 20, 'open')`,
+		brokenID, pairs[0].ID); err != nil {
+		t.Fatalf("insert broken position: %v", err)
+	}
+
+	// 正常な期限切れゲーム。壊れたゲームの後に処理される（ID 順）。
+	normalID := insertPlayingReplayGame(t, ctx, pool, "rank-fail-normal", "normal", "900000060",
+		now.Add(-10*time.Minute))
+	gameIDs = append(gameIDs, normalID)
+
+	if _, err := svc.GetRanking(ctx); err == nil {
+		t.Fatal("GetRanking = nil error, want error from the broken game")
+	}
+
+	// 壊れたゲームの失敗でロールバックされず、正常なゲームは確定している。
+	var normalStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM replay_games WHERE id = $1`, normalID).Scan(&normalStatus); err != nil {
+		t.Fatalf("query normal game: %v", err)
+	}
+	if normalStatus != replayStatusFinished {
+		t.Errorf("normal game status = %s, want finished (other games must still be processed)", normalStatus)
+	}
+
+	// 壊れたゲームは確定できず playing のまま（そのゲームの変更だけがロールバックされる）。
+	var brokenStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM replay_games WHERE id = $1`, brokenID).Scan(&brokenStatus); err != nil {
+		t.Fatalf("query broken game: %v", err)
+	}
+	if brokenStatus != replayStatusPlaying {
+		t.Errorf("broken game status = %s, want playing", brokenStatus)
+	}
+}

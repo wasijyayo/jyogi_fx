@@ -893,6 +893,26 @@ func (s *ReplayService) getGameForUpdate(ctx context.Context, q *db.Queries, tok
 // ランキング取得の前に呼び、終了時刻を過ぎて未確定のゲームを先に確定させる。
 // 同時リクエストで二重処理しないよう、ゲームの行を 1 件ずつロックする（ID 順で取る）。
 func (s *ReplayService) finishExpiredGames(ctx context.Context, now time.Time) error {
+	// 一覧はトランザクションの外で取る。ゲームごとに短いトランザクションを張るため、
+	// 1 件の失敗で他のゲームの確定までロールバックされることはない（CodeRabbit 指摘）。
+	ids, err := db.New(s.pool).ListPlayingReplayGameIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list playing replay games: %w", err)
+	}
+
+	var firstErr error
+	for _, id := range ids {
+		if err := s.finishExpiredGame(ctx, id, now); err != nil && firstErr == nil {
+			// 1 件失敗しても残りのゲームは処理し、最初のエラーだけを返す。
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// finishExpiredGame は 1 ゲームだけを短いトランザクションで確定させる。
+// 行ロック → 派生データ読み込み → advance → Commit をこの関数内で完結させる。
+func (s *ReplayService) finishExpiredGame(ctx context.Context, id int64, now time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -900,27 +920,21 @@ func (s *ReplayService) finishExpiredGames(ctx context.Context, now time.Time) e
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := db.New(tx)
 
-	ids, err := q.ListPlayingReplayGameIDs(ctx)
+	game, err := q.GetReplayGameByIDForUpdate(ctx, id)
 	if err != nil {
-		return fmt.Errorf("list playing replay games: %w", err)
+		// 一覧取得とロックの間に削除されたゲーム（不適切なゲスト名の削除など）は
+		// 集計対象から外す。並列実行されるテストの後始末でも同じ競合が起きうる。
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("get replay game for update: %w", err)
 	}
-	for _, id := range ids {
-		game, err := q.GetReplayGameByIDForUpdate(ctx, id)
-		if err != nil {
-			// 一覧取得とロックの間に削除されたゲーム（不適切なゲスト名の削除など）は
-			// 集計対象から外す。並列実行されるテストの後始末でも同じ競合が起きうる。
-			if errors.Is(err, pgx.ErrNoRows) {
-				continue
-			}
-			return fmt.Errorf("get replay game for update: %w", err)
-		}
-		c, err := loadReplayCtx(ctx, q, game.ID)
-		if err != nil {
-			return err
-		}
-		if _, _, err := s.advance(ctx, q, game, c, now); err != nil {
-			return err
-		}
+	c, err := loadReplayCtx(ctx, q, game.ID)
+	if err != nil {
+		return err
+	}
+	if _, _, err := s.advance(ctx, q, game, c, now); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
