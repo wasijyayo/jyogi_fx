@@ -231,6 +231,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/replay/ranking:
+    get:
+      operationId: getReplayRanking
+      summary: 過去チャートモードのランキングを取得する（ログイン不要）
+      tags: [replay]
+      responses:
+        "200":
+          description: 上位 20 件（ログインユーザーとゲストを同じ一覧に並べる）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReplayRankingEntry"
+
   /api/replay/games:
     post:
       operationId: startReplayGame
@@ -1123,6 +1138,32 @@ components:
           type: integer
         publishedDays:
           type: integer
+
+    ReplayRankingEntry:
+      type: object
+      required:
+        - rank
+        - name
+        - isGuest
+        - avatarUrl
+        - finalFunds
+      properties:
+        rank:
+          type: integer
+          description: 1 始まりの順位（並び順の位置）
+        name:
+          type: string
+          description: 表示名（ログインユーザー）またはゲスト名
+        isGuest:
+          type: boolean
+          description: ゲストの行か（画面で「ゲスト」の印を付ける）
+        avatarUrl:
+          type: string
+          nullable: true
+          description: Discord のアイコン URL（ゲストは null）
+        finalFunds:
+          type: string
+          description: スコア（最終資金。decimal文字列。CLAUDE.md §5.2 float禁止）
 
     Error:
       type: object

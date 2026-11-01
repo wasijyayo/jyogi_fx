@@ -3,7 +3,9 @@ package game
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -620,12 +622,27 @@ func TestReplay_OrderRestrictions(t *testing.T) {
 	clock := &replayTestClock{now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}
 	svc := newReplayServiceForTest(pool, clock)
 
-	// ゲスト名の検証。
+	// ゲスト名の検証（前後の空白を除いて 1〜16 文字。文字数はルーンで数える。#104）。
 	if _, err := svc.StartGame(ctx, "", ""); !errors.Is(err, ErrReplayInvalidGuestName) {
 		t.Errorf("empty guest name = %v, want ErrReplayInvalidGuestName", err)
 	}
+	if _, err := svc.StartGame(ctx, "", "   \t  "); !errors.Is(err, ErrReplayInvalidGuestName) {
+		t.Errorf("whitespace-only guest name = %v, want ErrReplayInvalidGuestName", err)
+	}
+	if _, err := svc.StartGame(ctx, "", "1234567890123456"); err != nil {
+		t.Errorf("16-char guest name = %v, want nil", err)
+	}
 	if _, err := svc.StartGame(ctx, "", "12345678901234567"); !errors.Is(err, ErrReplayInvalidGuestName) {
 		t.Errorf("17-char guest name = %v, want ErrReplayInvalidGuestName", err)
+	}
+	if _, err := svc.StartGame(ctx, "", "   1234567890123456   "); err != nil {
+		t.Errorf("16-char guest name with spaces = %v, want nil", err)
+	}
+	if _, err := svc.StartGame(ctx, "", strings.Repeat("あ", 16)); err != nil {
+		t.Errorf("16 multibyte guest name = %v, want nil", err)
+	}
+	if _, err := svc.StartGame(ctx, "", strings.Repeat("あ", 17)); !errors.Is(err, ErrReplayInvalidGuestName) {
+		t.Errorf("17 multibyte guest name = %v, want ErrReplayInvalidGuestName", err)
 	}
 
 	res, err := svc.StartGame(ctx, "", "  guest  ")
@@ -936,6 +953,331 @@ func TestReplay_NewDatasetDoesNotChangeExistingGame(t *testing.T) {
 			if !c.Close.Equal(dec("100")) {
 				t.Errorf("candle day %d close = %s, want 100 (must not change)", c.Day, c.Close)
 			}
+		}
+	}
+}
+
+// insertRankingUser はランキングのテスト用ユーザーを作る。avatar が空なら NULL。
+func insertRankingUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, discordID, displayName, avatar string) {
+	t.Helper()
+	var avatarValue pgtype.Text
+	if avatar != "" {
+		avatarValue = pgtype.Text{String: avatar, Valid: true}
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (discord_id, display_name, avatar)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (discord_id) DO UPDATE SET
+			display_name = EXCLUDED.display_name,
+			avatar = EXCLUDED.avatar`,
+		discordID, displayName, avatarValue); err != nil {
+		t.Fatalf("insert ranking user %s: %v", discordID, err)
+	}
+}
+
+// insertFinishedReplayGame は確定済みのゲームを直接作る（ランキングのテストデータ）。
+// userID が空ならゲスト（guestName）として作る。finalFunds は decimal 文字列。
+func insertFinishedReplayGame(t *testing.T, ctx context.Context, pool *pgxpool.Pool, token, userID, guestName, finalFunds string, finishedAt time.Time) int64 {
+	t.Helper()
+	var userValue, guestValue pgtype.Text
+	if userID != "" {
+		userValue = pgtype.Text{String: userID, Valid: true}
+	}
+	if guestName != "" {
+		guestValue = pgtype.Text{String: guestName, Valid: true}
+	}
+	var id int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO replay_games (
+			token_hash, user_id, guest_name, started_at, start_year, status,
+			funds, final_funds, finished_at
+		) VALUES ($1, $2, $3, $4, 2015, 'finished', $5, $5, $6)
+		RETURNING id`,
+		token, userValue, guestValue, finishedAt.Add(-180*time.Second), finalFunds, finishedAt,
+	).Scan(&id); err != nil {
+		t.Fatalf("insert finished replay game %s: %v", token, err)
+	}
+	return id
+}
+
+// rankingEntryIndex は name と finalFunds が一致する行の位置を返す（無ければ -1）。
+func rankingEntryIndex(entries []ReplayRankingEntry, name, finalFunds string) int {
+	for i, e := range entries {
+		if e.Name == name && e.FinalFunds.Equal(dec(finalFunds)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// cleanupReplayRankingRows はランキングのテストで INSERT したゲーム・ユーザーだけを削除する。
+// go test ./... はパッケージを並列に走らせるため、WHERE 無しの DELETE は使わない。
+// 子テーブルから順に削除し、失敗は t.Errorf で検出する。
+func cleanupReplayRankingRows(t *testing.T, pool *pgxpool.Pool, gameIDs []int64, userIDs []string) {
+	t.Helper()
+	cctx := context.Background()
+	if len(gameIDs) > 0 {
+		for _, table := range []string{
+			"replay_positions",
+			"replay_leverage_unlocks",
+			"replay_speed_changes",
+			"replay_game_rates",
+			"replay_game_days",
+		} {
+			query := "DELETE FROM " + table + " WHERE game_id = ANY($1)"
+			if _, err := pool.Exec(cctx, query, gameIDs); err != nil {
+				t.Errorf("cleanup %s: %v", table, err)
+			}
+		}
+		if _, err := pool.Exec(cctx, `DELETE FROM replay_games WHERE id = ANY($1)`, gameIDs); err != nil {
+			t.Errorf("cleanup replay_games: %v", err)
+		}
+	}
+	if len(userIDs) > 0 {
+		if _, err := pool.Exec(cctx, `DELETE FROM users WHERE discord_id = ANY($1)`, userIDs); err != nil {
+			t.Errorf("cleanup users: %v", err)
+		}
+	}
+}
+
+// insertPlayingReplayGame は未確定（status = playing）のゲームを直接作る。日足の記録は
+// 作らないため、建玉が無いゲームを確定させるテストにだけ使う（確定処理は建玉が無ければ
+// 日足を読まない）。
+func insertPlayingReplayGame(t *testing.T, ctx context.Context, pool *pgxpool.Pool, token, guestName, funds string, startedAt time.Time) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO replay_games (
+			token_hash, user_id, guest_name, started_at, start_year, status, funds
+		) VALUES ($1, NULL, $2, $3, 2015, 'playing', $4)
+		RETURNING id`,
+		token, guestName, startedAt, funds,
+	).Scan(&id); err != nil {
+		t.Fatalf("insert playing replay game %s: %v", token, err)
+	}
+	return id
+}
+
+// TestReplay_Ranking はランキングの選び方・並び・アイコン・ゲスト印を確認する（#104）。
+// テストデータは全体の上位 20 件に入るよう極端に大きいスコアを使い、自分の行どうしの
+// 相対順序だけを検証する（他のテストのデータに左右されないため）。
+func TestReplay_Ranking(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	const (
+		userA = "900000000000000001" // avatar あり
+		userB = "999999999999999999" // avatar なし（デフォルト index 1）
+	)
+	gameIDs := make([]int64, 0, 9)
+	userIDs := []string{userA, userB}
+	// 挿入前から登録しておく（途中で失敗しても挿入済みの行は消す）。
+	t.Cleanup(func() { cleanupReplayRankingRows(t, pool, gameIDs, userIDs) })
+	insertRankingUser(t, ctx, pool, userA, "Alice", "avatar-a")
+	insertRankingUser(t, ctx, pool, userB, "Bob", "")
+
+	// 時計は他のテストのゲーム開始時刻（2026 年）より前の 2025-06-01 にする。ランキング取得は
+	// status = playing のゲームをすべて advance するため、未来に開始した他テストのゲームは
+	// 公開日数 0 のまま影響を受けない。
+	base := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	clock := &replayTestClock{now: base}
+	svc := newReplayServiceForTest(pool, clock)
+
+	// 期限切れだが未確定のゲーム。テスト時計の 10 分前に開始し、取得時に確定されて
+	// ランキングに載る（建玉が無いため日足は不要）。
+	expiredStartedAt := base.Add(-10 * time.Minute)
+	expiredID := insertPlayingReplayGame(t, ctx, pool, "rank-expired", "expired", "900000050", expiredStartedAt)
+	gameIDs = append(gameIDs, expiredID)
+
+	// ログインユーザーの自己最高と同点の再プレイ。先着（元の記録）が残ることを確認する。
+	originalID := insertFinishedReplayGame(t, ctx, pool, "rank-a-original", userA, "",
+		"900000030", base.Add(-20*time.Minute))
+	gameIDs = append(gameIDs, originalID)
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-a-replay", userA, "",
+		"900000030", base.Add(-10*time.Minute)))
+	// 元の記録と再プレイの間に確定した同点のゲスト。元の記録が選ばれれば Alice が上になる。
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-between", "", "between",
+		"900000030", base.Add(-15*time.Minute)))
+
+	// ゲストは同名でも別の行。ログインユーザーは 1 人 1 行。
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-guest-1", "", "guest", "900000025", base.Add(-5*time.Minute)))
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-guest-2", "", "guest", "900000015", base.Add(-25*time.Minute)))
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-b", userB, "", "900000020", base.Add(-30*time.Minute)))
+	// 同点は finished_at が早い方が上（取得時刻ではない）。
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-tie-late", "", "tie-late", "900000005", base.Add(-35*time.Minute)))
+	gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool, "rank-tie-early", "", "tie-early", "900000005", base.Add(-40*time.Minute)))
+
+	// 時計は動かさない（期限切れのゲームは開始時刻が過去なので既に 60 日目を過ぎている）。
+	entries, err := svc.GetRanking(ctx)
+	if err != nil {
+		t.Fatalf("GetRanking: %v", err)
+	}
+
+	// 未確定だったゲームが確定し、論理的な終了時刻（開始 + 180 秒）で保存される。
+	var status string
+	var finishedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT status, finished_at FROM replay_games WHERE id = $1`, expiredID).
+		Scan(&status, &finishedAt); err != nil {
+		t.Fatalf("query expired game: %v", err)
+	}
+	if status != replayStatusFinished {
+		t.Errorf("expired game status = %s, want finished", status)
+	}
+	if want := expiredStartedAt.Add(180 * time.Second); !finishedAt.Equal(want) {
+		t.Errorf("expired game finished_at = %s, want %s (logical finish)", finishedAt, want)
+	}
+	if idx := rankingEntryIndex(entries, "expired", "900000050"); idx < 0 {
+		t.Errorf("expired game is not in ranking: %+v", entries)
+	}
+
+	// ログインユーザーは 1 人 1 行で、同点の再プレイがあっても元の記録（先着）が残る。
+	aliceCount := 0
+	for _, e := range entries {
+		if e.Name == "Alice" {
+			aliceCount++
+		}
+	}
+	if aliceCount != 1 {
+		t.Errorf("Alice rows = %d, want 1", aliceCount)
+	}
+	if idx := rankingEntryIndex(entries, "Alice", "900000030"); idx < 0 {
+		t.Errorf("Alice's best record is not in ranking: %+v", entries)
+	}
+	rows, err := db.New(pool).ListReplayRanking(ctx)
+	if err != nil {
+		t.Fatalf("ListReplayRanking: %v", err)
+	}
+	foundOriginal := false
+	for _, r := range rows {
+		if r.UserID.Valid && r.UserID.String == userA {
+			foundOriginal = r.ID == originalID
+			if !r.FinalFunds.Decimal.Equal(dec("900000030")) {
+				t.Errorf("Alice chosen final = %s, want 900000030", r.FinalFunds.Decimal)
+			}
+		}
+	}
+	if !foundOriginal {
+		t.Error("Alice's chosen record is not the earlier one (replay must not displace the original)")
+	}
+
+	// アイコン URL。avatar ありは hash、なしは Discord のデフォルト（ID から決まる）。
+	for _, e := range entries {
+		if e.Name == "Alice" {
+			want := "https://cdn.discordapp.com/avatars/" + userA + "/avatar-a.png"
+			if e.AvatarURL == nil || *e.AvatarURL != want {
+				t.Errorf("Alice avatarUrl = %v, want %s", e.AvatarURL, want)
+			}
+			if e.IsGuest {
+				t.Error("Alice must not be marked as guest")
+			}
+		}
+		if e.Name == "Bob" {
+			want := "https://cdn.discordapp.com/embed/avatars/1.png"
+			if e.AvatarURL == nil || *e.AvatarURL != want {
+				t.Errorf("Bob avatarUrl = %v, want %s", e.AvatarURL, want)
+			}
+		}
+	}
+
+	// ゲストは同名でも 1 プレイ 1 行で、ゲスト印が付き、アイコンは null。
+	g1 := rankingEntryIndex(entries, "guest", "900000025")
+	g2 := rankingEntryIndex(entries, "guest", "900000015")
+	if g1 < 0 || g2 < 0 {
+		t.Fatalf("guest rows not found: %+v", entries)
+	}
+	for _, idx := range []int{g1, g2} {
+		if !entries[idx].IsGuest {
+			t.Errorf("guest row %q must be marked as guest", entries[idx].Name)
+		}
+		if entries[idx].AvatarURL != nil {
+			t.Errorf("guest row avatarUrl = %v, want nil", entries[idx].AvatarURL)
+		}
+	}
+
+	// 自分の行どうしの相対順序（final_funds DESC, finished_at ASC, id ASC）。
+	wantOrder := []struct {
+		name  string
+		funds string
+	}{
+		{"expired", "900000050"},
+		{"Alice", "900000030"},
+		{"between", "900000030"},
+		{"guest", "900000025"},
+		{"Bob", "900000020"},
+		{"guest", "900000015"},
+		{"tie-early", "900000005"},
+		{"tie-late", "900000005"},
+	}
+	prev := -1
+	for _, w := range wantOrder {
+		idx := rankingEntryIndex(entries, w.name, w.funds)
+		if idx < 0 {
+			t.Fatalf("ranking entry %s/%s not found: %+v", w.name, w.funds, entries)
+		}
+		if idx <= prev {
+			t.Errorf("ranking order wrong at %s/%s (index %d, prev %d): %+v", w.name, w.funds, idx, prev, entries)
+		}
+		prev = idx
+	}
+
+	// rank は 1 始まりの並び順の位置。
+	for i, e := range entries {
+		if e.Rank != i+1 {
+			t.Errorf("entries[%d].Rank = %d, want %d", i, e.Rank, i+1)
+		}
+	}
+}
+
+// TestReplay_RankingLimit はランキングが上位 20 件までであることを確認する（#104）。
+// 時計は他のテストのゲーム開始時刻より前の 2025-06-01 にする（並列実行される他パッケージの
+// ゲームを確定させないため）。自分の 25 件だけで上位 20 件が埋まることを検証する。
+func TestReplay_RankingLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	gameIDs := make([]int64, 0, 25)
+	t.Cleanup(func() { cleanupReplayRankingRows(t, pool, gameIDs, nil) })
+
+	clock := &replayTestClock{now: time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)}
+	svc := newReplayServiceForTest(pool, clock)
+
+	// 25 件を投入する。他のテストのデータに左右されず自分の行だけで 20 件を超えるよう、
+	// 900000000 台の大きな値を使う（ただし他のランキングテストよりは低い値にして、
+	// 並列実行時に互いの行を押し出さないようにする）。
+	const limitBase = 800000000
+	for i := 1; i <= 25; i++ {
+		funds := fmt.Sprintf("%d", limitBase+i)
+		gameIDs = append(gameIDs, insertFinishedReplayGame(t, ctx, pool,
+			fmt.Sprintf("rank-limit-%d", i), "", fmt.Sprintf("limit-%d", i), funds,
+			clock.now.Add(time.Duration(i)*time.Second)))
+	}
+
+	entries, err := svc.GetRanking(ctx)
+	if err != nil {
+		t.Fatalf("GetRanking: %v", err)
+	}
+	if len(entries) != 20 {
+		t.Fatalf("ranking length = %d, want 20", len(entries))
+	}
+	// 上位 20 件がスコアの降順で、rank が 1 始まりの位置になっていることだけを検証する
+	// （並列実行される他パッケージのデータが混ざっても成立する）。
+	for i, e := range entries {
+		if e.Rank != i+1 {
+			t.Errorf("entries[%d].Rank = %d, want %d", i, e.Rank, i+1)
+		}
+		if i > 0 && entries[i-1].FinalFunds.LessThan(e.FinalFunds) {
+			t.Errorf("ranking is not sorted by finalFunds at %d: %s then %s",
+				i, entries[i-1].FinalFunds, e.FinalFunds)
+		}
+	}
+	// 自分の 25 件のうち、下位 5 件（801〜805）は必ず上位 20 件から外れる。上位側の
+	// どの行が残るかは他パッケージの並列データに左右されるため検証しない。
+	for i := 1; i <= 5; i++ {
+		idx := rankingEntryIndex(entries, fmt.Sprintf("limit-%d", i), fmt.Sprintf("%d", limitBase+i))
+		if idx >= 0 {
+			t.Errorf("limit-%d should not be in the top 20", i)
 		}
 	}
 }

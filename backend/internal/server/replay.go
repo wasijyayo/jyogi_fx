@@ -60,6 +60,17 @@ func (s *apiServer) StartReplayGame(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, replayStartedToAPI(result))
 }
 
+// GetReplayRanking は GET /api/replay/ranking。ログイン不要のランキング（上位 20 件）。
+// ログインユーザーは Discord のアイコン＋表示名、ゲストは名前＋ゲスト印を返す（#104）。
+func (s *apiServer) GetReplayRanking(w http.ResponseWriter, r *http.Request) {
+	entries, err := s.replay.GetRanking(r.Context())
+	if err != nil {
+		writeReplayError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, replayRankingToAPI(entries))
+}
+
 // GetReplayGameState は GET /api/replay/games/{gameId}。ゲーム状態を返す（遅延評価込み）。
 func (s *apiServer) GetReplayGameState(w http.ResponseWriter, r *http.Request, gameId int64) {
 	token, ok := bearerToken(r)
@@ -347,6 +358,24 @@ func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 	if s.FinalFunds != nil {
 		v := s.FinalFunds.String()
 		out.FinalFunds = &v
+	}
+	return out
+}
+
+func replayRankingToAPI(entries []game.ReplayRankingEntry) []apigen.ReplayRankingEntry {
+	out := make([]apigen.ReplayRankingEntry, 0, len(entries))
+	for _, e := range entries {
+		item := apigen.ReplayRankingEntry{
+			Rank:       e.Rank,
+			Name:       e.Name,
+			IsGuest:    e.IsGuest,
+			FinalFunds: e.FinalFunds.String(),
+		}
+		if e.AvatarURL != nil {
+			v := *e.AvatarURL
+			item.AvatarUrl = &v
+		}
+		out = append(out, item)
 	}
 	return out
 }

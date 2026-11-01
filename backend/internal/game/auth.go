@@ -97,8 +97,8 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 
 	q := db.New(tx)
 
-	// Webログイン時は既存ユーザーの display_name を Discord の最新のユーザー名に更新する。
-	if err := registerUser(ctx, q, du.ID, du.Username, true); err != nil {
+	// Webログイン時は既存ユーザーの display_name とアイコンを Discord の最新の値に更新する。
+	if err := registerUser(ctx, q, du.ID, du.Username, true, du.Avatar); err != nil {
 		return Session{}, err
 	}
 
@@ -124,20 +124,26 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string) (Session,
 // IDでそのまま作れば後でWebログインしても同じユーザーに繋がる。
 // 既存ユーザーには何もしないため何度呼んでも初期資金の二重付与にならない。
 func (s *AuthService) EnsureDiscordUser(ctx context.Context, discordID, displayName string) error {
-	// display_name の更新は Web ログイン時（HandleCallback）に任せる。
-	return registerUser(ctx, db.New(s.pool), discordID, displayName, false)
+	// display_name・アイコンの更新は Web ログイン時（HandleCallback）に任せる。
+	// Interaction のペイロードにはアイコンが無いため、ここでは avatar に触らない（#104）。
+	return registerUser(ctx, db.New(s.pool), discordID, displayName, false, nil)
 }
 
 // registerUser は users 行が無ければ作成する。Web ログイン（HandleCallback）と
 // Discord Interaction（EnsureDiscordUser）のどちらの入口からもここを通す（CLAUDE.md §4）。
 // 初期資金（design.md §7.0）は users.balance の DEFAULT 列で付与される。
-// 既存ユーザーの場合、updateDisplayName が true なら display_name だけ更新し、
-// false なら何もしない。
-func registerUser(ctx context.Context, q *db.Queries, discordID, displayName string, updateDisplayName bool) error {
+// 既存ユーザーの場合、updateDisplayName が true なら display_name と avatar を更新し、
+// false なら何もしない。avatar が nil（Discord で未設定）なら NULL を保存する（#104）。
+func registerUser(ctx context.Context, q *db.Queries, discordID, displayName string, updateDisplayName bool, avatar *string) error {
 	if updateDisplayName {
+		var avatarValue pgtype.Text
+		if avatar != nil && *avatar != "" {
+			avatarValue = pgtype.Text{String: *avatar, Valid: true}
+		}
 		if _, err := q.UpsertUser(ctx, db.UpsertUserParams{
 			DiscordID:   discordID,
 			DisplayName: displayName,
+			Avatar:      avatarValue,
 		}); err != nil {
 			return fmt.Errorf("upsert user: %w", err)
 		}
