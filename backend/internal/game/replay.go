@@ -77,6 +77,8 @@ var (
 	ErrReplayInvalidGuestName = errors.New("guest name must be 1-16 characters")
 	// ErrReplayGameFinished は終了済みゲームに対して操作した場合に返る。
 	ErrReplayGameFinished = errors.New("replay game already finished")
+	// ErrReplayGameNotFinished はまだ終了していないゲームの結果を取得した場合に返る（#127）。
+	ErrReplayGameNotFinished = errors.New("replay game not finished")
 	// ErrReplayGameNotStarted は ready（「取引開始」前）のゲームに対して操作した場合に返る
 	// （#126 REPLAY-9）。
 	ErrReplayGameNotStarted = errors.New("replay game has not started yet")
@@ -277,6 +279,96 @@ func replayNextUnlock(baseMaxLeverage decimal.Decimal, tier int32) (nextLeverage
 	return nextLeverage, cost
 }
 
+// replayAssetPosition は資産推移の計算に必要な建玉 1 件分（#127 REPLAY-10）。
+// 純粋関数に渡すため、DB の型（pgtype）ではなく素の値で持つ。
+type replayAssetPosition struct {
+	PairID        int64
+	Side          Side
+	InitialMargin decimal.Decimal
+	Margin        decimal.Decimal
+	Leverage      int32
+	EntryPrice    decimal.Decimal
+	EntryDay      int32
+	Closed        bool
+	ClosedDay     int32
+	Pnl           decimal.Decimal
+	FeeRate       decimal.Decimal
+}
+
+// replayAssetUnlockPayment は上限解放の支払いログ 1 件分（#127）。
+type replayAssetUnlockPayment struct {
+	Day  int32
+	Cost decimal.Decimal
+}
+
+// replayAssetHistory は区間の各営業日の資産（余力 + 建玉の評価額）を計算する純粋関数
+// （#127 REPLAY-10）。建玉・日足（各日の終値）・上限解放の支払いログだけから求める。
+//
+// 資産 = 初期資金 − 建玉の新規手数料 − 決済済み建玉の確定損益（決済手数料込み）
+//
+//	− 上限解放の支払い + 未決済建玉の含み損益
+//
+// 証拠金は未使用資金から移すだけなので資産は変わらない（証拠金の追加も同様）。
+// 決済で戻る額は replayCloseReturn（0 未満にならない）と同じ式で計算する。
+func replayAssetHistory(
+	initialFunds decimal.Decimal,
+	positions []replayAssetPosition,
+	payments []replayAssetUnlockPayment,
+	closes map[int64]map[int32]decimal.Decimal,
+	fromDay, toDay int32,
+) []ReplayAssetPoint {
+	points := make([]ReplayAssetPoint, 0, int(toDay-fromDay)+1)
+	for day := fromDay; day <= toDay; day++ {
+		equity := initialFunds
+		for _, pos := range positions {
+			if day < pos.EntryDay {
+				continue
+			}
+			notional := replayNotional(pos.InitialMargin, pos.Leverage)
+			// 新規手数料は注文時に払い済み（design.md §13）。
+			equity = equity.Sub(replayFee(notional, pos.FeeRate))
+
+			if pos.Closed && pos.ClosedDay <= day {
+				// 決済済み: 決済で戻る額 − 証拠金（証拠金は資産の内訳が変わるだけ）。
+				fee := replayFee(notional, pos.FeeRate)
+				returned := replayCloseReturn(pos.Margin, pos.Pnl, fee)
+				equity = equity.Add(returned).Sub(pos.Margin)
+				continue
+			}
+
+			// 未決済: その日の終値で評価する（その日の日足が無ければ据え置き）。
+			byDay, ok := closes[pos.PairID]
+			if !ok {
+				continue
+			}
+			price, ok := byDay[day]
+			if !ok {
+				continue
+			}
+			equity = equity.Add(replayPnL(pos.Side, pos.EntryPrice, price, notional))
+		}
+		for _, p := range payments {
+			if p.Day <= day {
+				equity = equity.Sub(p.Cost)
+			}
+		}
+		points = append(points, ReplayAssetPoint{Day: int(day), Equity: equity.Round(8)})
+	}
+	return points
+}
+
+// replayWinRate は勝率（%）を返す。決済した建玉のうち損益が正のものの割合で、
+// 小数 2 桁に丸める（#127 REPLAY-10）。建玉が無ければ 0。
+func replayWinRate(wins, total int) decimal.Decimal {
+	if total == 0 {
+		return decimal.Zero
+	}
+	return decimal.NewFromInt(int64(wins)).
+		Mul(decimal.NewFromInt(100)).
+		Div(decimal.NewFromInt(int64(total))).
+		Round(2)
+}
+
 // minOrderCost は「最低注文額と新規手数料を払える最小の注文」の費用（早期終了判定に使う）。
 // 最低証拠金 1 × 最低レバレッジ 1 の取引規模 1 に対する手数料率が最小のペアで計算する。
 func minOrderCost(pairs []db.CurrencyPair) decimal.Decimal {
@@ -386,6 +478,10 @@ type ReplayPositionView struct {
 	Status          string
 	ClosePrice      *decimal.Decimal
 	Pnl             *decimal.Decimal
+	// ClosedDay / ClosedDate は決済した日（通し番号と、終了後のみ正確な日付）。
+	// 未決済の建玉はどちらも nil。
+	ClosedDay  *int
+	ClosedDate *time.Time
 	// UnrealizedPnl は未決済建玉の含み損益（公開済みの最新の終値で計算）。
 	// 入力 API の結果など、価格を渡していない場面では nil。
 	UnrealizedPnl *decimal.Decimal
@@ -401,7 +497,9 @@ type ReplayState struct {
 	PublishedDays int
 	Pairs         []ReplayPair
 	Positions     []ReplayPositionView
-	Candles       []ReplayPairCandles
+	// ClosedPositions は決済済み・強制決済済みの建玉（#127 REPLAY-10）。
+	ClosedPositions []ReplayPositionView
+	Candles         []ReplayPairCandles
 	// TotalUnrealizedPnl は未決済建玉の含み損益の合計（建玉が無ければ 0）。
 	TotalUnrealizedPnl decimal.Decimal
 	// 以下は終了後にのみセット（先読み対策で終了前は nil）。
@@ -420,6 +518,34 @@ type ReplayStartResult struct {
 	PublishedDays int
 	Pairs         []ReplayPair
 	Candles       []ReplayPairCandles
+}
+
+// ReplayAssetPoint は資産推移の 1 日分（#127 REPLAY-10）。
+type ReplayAssetPoint struct {
+	Day    int
+	Date   time.Time
+	Equity decimal.Decimal
+}
+
+// ReplayResult はゲーム結果の取得結果（#127 REPLAY-10。終了後のみ）。
+type ReplayResult struct {
+	GameID        int64
+	Status        string
+	StartYear     int
+	IntervalStart time.Time
+	IntervalEnd   time.Time
+	FinalFunds    decimal.Decimal
+	// Rank / Participants は既存ランキングと同じ並びでの順位と参加行数。
+	Rank           int
+	Participants   int
+	IsPersonalBest bool
+	// MaxProfit / MaxLoss は決済した建玉の損益の最大値・最小値（無ければ 0）。
+	MaxProfit        decimal.Decimal
+	MaxLoss          decimal.Decimal
+	WinRate          decimal.Decimal
+	LiquidationCount int
+	MaxFunds         decimal.Decimal
+	AssetHistory     []ReplayAssetPoint
 }
 
 // ReplayRankingEntry はランキングの 1 行（#104 REPLAY-4）。
@@ -1182,6 +1308,21 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		posViews = append(posViews, view)
 	}
 
+	closed, err := q.ListClosedReplayPositions(ctx, game.ID)
+	if err != nil {
+		return ReplayState{}, fmt.Errorf("list closed positions: %w", err)
+	}
+	closedViews := make([]ReplayPositionView, 0, len(closed))
+	for _, pos := range closed {
+		view := replayPositionView(pos, c.pairByID[pos.PairID].Symbol)
+		// 正確な日付は終了後のみ（先読み対策。design.md §13）。
+		if finished && view.ClosedDay != nil && *view.ClosedDay >= 0 && *view.ClosedDay < len(days) {
+			d := days[*view.ClosedDay]
+			view.ClosedDate = &d
+		}
+		closedViews = append(closedViews, view)
+	}
+
 	candles := buildReplayCandles(c.pairs, c.ratesByPair, days, 0, currentDay, finished)
 
 	state := ReplayState{
@@ -1193,6 +1334,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		PublishedDays:      published,
 		Pairs:              pairs,
 		Positions:          posViews,
+		ClosedPositions:    closedViews,
 		Candles:            candles,
 		TotalUnrealizedPnl: totalUnrealized,
 	}
@@ -1206,6 +1348,181 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		state.FinalFunds = &finalFunds
 	}
 	return state, nil
+}
+
+// GetResult は終了したゲームの結果を返す（#127 REPLAY-10）。終了前は
+// ErrReplayGameNotFinished を返す（区間の日付も返さない）。
+func (s *ReplayService) GetResult(ctx context.Context, token string, gameID int64) (ReplayResult, error) {
+	now := s.clock.Now()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ReplayResult{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := db.New(tx)
+
+	game, err := s.getGameForUpdate(ctx, q, token, gameID)
+	if err != nil {
+		return ReplayResult{}, err
+	}
+	c, err := loadReplayCtx(ctx, q, game.ID)
+	if err != nil {
+		return ReplayResult{}, err
+	}
+	game, _, err = s.advance(ctx, q, game, c, now)
+	if err != nil {
+		return ReplayResult{}, err
+	}
+	// ready（「取引開始」前）も playing も「まだ終了していない」として扱う（#126 / #127）。
+	if game.Status != replayStatusFinished && game.Status != replayStatusEarlyFinished {
+		return ReplayResult{}, ErrReplayGameNotFinished
+	}
+
+	days := make([]time.Time, len(c.days))
+	for _, d := range c.days {
+		days[d.DayIndex] = d.Date.Time
+	}
+	if len(days) <= replayPreDays || len(days) < replayPreDays+replayIntervalDays {
+		return ReplayResult{}, fmt.Errorf("replay game days are incomplete: %d", len(days))
+	}
+
+	positions, err := q.ListReplayPositions(ctx, game.ID)
+	if err != nil {
+		return ReplayResult{}, fmt.Errorf("list replay positions: %w", err)
+	}
+	payments, err := q.ListReplayLeverageUnlockPayments(ctx, game.ID)
+	if err != nil {
+		return ReplayResult{}, fmt.Errorf("list leverage unlock payments: %w", err)
+	}
+
+	// 純粋関数 replayAssetHistory に渡す形（DB の型を持ち込まない）に変換する。
+	assetPositions := make([]replayAssetPosition, 0, len(positions))
+	for _, pos := range positions {
+		pair, ok := c.pairByID[pos.PairID]
+		if !ok {
+			continue
+		}
+		ap := replayAssetPosition{
+			PairID:        pos.PairID,
+			Side:          Side(pos.Side),
+			InitialMargin: pos.InitialMargin,
+			Margin:        pos.Margin,
+			Leverage:      pos.Leverage,
+			EntryPrice:    pos.EntryPrice,
+			EntryDay:      pos.EntryDay,
+			FeeRate:       pair.FeeRate,
+		}
+		if pos.Status != replayPositionOpen && pos.ClosedDay.Valid && pos.Pnl.Valid {
+			ap.Closed = true
+			ap.ClosedDay = pos.ClosedDay.Int32
+			ap.Pnl = pos.Pnl.Decimal
+		}
+		assetPositions = append(assetPositions, ap)
+	}
+	paymentInputs := make([]replayAssetUnlockPayment, 0, len(payments))
+	for _, p := range payments {
+		paymentInputs = append(paymentInputs, replayAssetUnlockPayment{Day: p.DayIndex, Cost: p.Cost})
+	}
+	closes := make(map[int64]map[int32]decimal.Decimal, len(c.ratesByPair))
+	for pairID, byDay := range c.ratesByPair {
+		m := make(map[int32]decimal.Decimal, len(byDay))
+		for day, r := range byDay {
+			m[day] = r.Close
+		}
+		closes[pairID] = m
+	}
+
+	history := replayAssetHistory(
+		decimal.NewFromInt(replayInitialFunds),
+		assetPositions,
+		paymentInputs,
+		closes,
+		replayPreDays,
+		replayPreDays-1+replayIntervalDays,
+	)
+	assetHistory := make([]ReplayAssetPoint, 0, len(history))
+	maxFunds := decimal.NewFromInt(replayInitialFunds)
+	for _, point := range history {
+		if point.Equity.GreaterThan(maxFunds) {
+			maxFunds = point.Equity
+		}
+		point.Date = days[point.Day]
+		assetHistory = append(assetHistory, point)
+	}
+
+	// 決済した建玉の利益・損失・勝率・強制決済回数。
+	maxProfit := decimal.Zero
+	maxLoss := decimal.Zero
+	wins := 0
+	settled := 0
+	liquidations := 0
+	for _, pos := range positions {
+		if pos.Status == replayPositionOpen || !pos.Pnl.Valid {
+			continue
+		}
+		settled++
+		pnl := pos.Pnl.Decimal
+		if pnl.GreaterThan(maxProfit) {
+			maxProfit = pnl
+		}
+		if pnl.LessThan(maxLoss) {
+			maxLoss = pnl
+		}
+		if pnl.IsPositive() {
+			wins++
+		}
+		if pos.Status == replayPositionLiquidated {
+			liquidations++
+		}
+	}
+
+	rankingRows, err := q.ListReplayRankingAll(ctx)
+	if err != nil {
+		return ReplayResult{}, fmt.Errorf("list replay ranking: %w", err)
+	}
+	rank := 0
+	isPersonalBest := false
+	for i, row := range rankingRows {
+		if game.UserID.Valid {
+			// ログインユーザーは 1 人 1 行（最高記録）だけが載る。ゲームが自己最高で
+			// なければ、順位は自己最高の行の順位になる。
+			if row.UserID.Valid && row.UserID.String == game.UserID.String {
+				rank = i + 1
+				isPersonalBest = row.ID == game.ID
+				break
+			}
+			continue
+		}
+		if row.ID == game.ID {
+			rank = i + 1
+			break
+		}
+	}
+	if rank == 0 {
+		return ReplayResult{}, fmt.Errorf("replay game %d is not in the ranking", game.ID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ReplayResult{}, fmt.Errorf("commit tx: %w", err)
+	}
+
+	return ReplayResult{
+		GameID:           game.ID,
+		Status:           game.Status,
+		StartYear:        int(game.StartYear),
+		IntervalStart:    days[replayPreDays],
+		IntervalEnd:      days[len(days)-1],
+		FinalFunds:       game.FinalFunds.Decimal,
+		Rank:             rank,
+		Participants:     len(rankingRows),
+		IsPersonalBest:   isPersonalBest,
+		MaxProfit:        maxProfit,
+		MaxLoss:          maxLoss,
+		WinRate:          replayWinRate(wins, settled),
+		LiquidationCount: liquidations,
+		MaxFunds:         maxFunds,
+		AssetHistory:     assetHistory,
+	}, nil
 }
 
 // replayPositionView は建玉 1 件分の表示情報を組み立てる（強制決済ライン込み）。
@@ -1232,6 +1549,10 @@ func replayPositionView(pos db.ReplayPosition, symbol string) ReplayPositionView
 	if pos.Pnl.Valid {
 		p := pos.Pnl.Decimal
 		v.Pnl = &p
+	}
+	if pos.ClosedDay.Valid {
+		d := int(pos.ClosedDay.Int32)
+		v.ClosedDay = &d
 	}
 	return v
 }
@@ -1576,7 +1897,7 @@ func (s *ReplayService) UnlockLeverage(ctx context.Context, token string, gameID
 	if err != nil {
 		return ReplayUnlockLeverageResult{}, err
 	}
-	game, _, err = s.advance(ctx, q, game, c, now)
+	game, published, err := s.advance(ctx, q, game, c, now)
 	if err != nil {
 		return ReplayUnlockLeverageResult{}, err
 	}
@@ -1617,6 +1938,18 @@ func (s *ReplayService) UnlockLeverage(ctx context.Context, token string, gameID
 	})
 	if err != nil {
 		return ReplayUnlockLeverageResult{}, fmt.Errorf("upsert leverage unlock: %w", err)
+	}
+	// 支払いログを残す（#127。結果画面の資産推移に使う）。公開日は通し番号で保存し、
+	// 正確な日付はゲーム終了後まで返さない（design.md §13）。
+	currentDay := int32(replayPreDays - 1 + published)
+	if _, err := q.CreateReplayLeverageUnlockPayment(ctx, db.CreateReplayLeverageUnlockPaymentParams{
+		GameID:   game.ID,
+		PairID:   pairID,
+		Tier:     newTier,
+		DayIndex: currentDay,
+		Cost:     cost,
+	}); err != nil {
+		return ReplayUnlockLeverageResult{}, fmt.Errorf("create leverage unlock payment: %w", err)
 	}
 	if err := q.UpdateReplayGameFunds(ctx, db.UpdateReplayGameFundsParams{
 		ID:    game.ID,

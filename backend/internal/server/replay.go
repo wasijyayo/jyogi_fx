@@ -104,6 +104,22 @@ func (s *apiServer) BeginReplayGame(w http.ResponseWriter, r *http.Request, game
 	writeJSON(w, http.StatusOK, replayStateToAPI(state))
 }
 
+// GetReplayGameResult は GET /api/replay/games/{gameId}/result。終了後のみ結果を返す（#127）。
+func (s *apiServer) GetReplayGameResult(w http.ResponseWriter, r *http.Request, gameId int64) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid token")
+		return
+	}
+
+	result, err := s.replay.GetResult(r.Context(), token, gameId)
+	if err != nil {
+		writeReplayError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, replayResultToAPI(result))
+}
+
 // PlaceReplayOrder は POST /api/replay/games/{gameId}/orders。
 func (s *apiServer) PlaceReplayOrder(w http.ResponseWriter, r *http.Request, gameId int64) {
 	token, ok := bearerToken(r)
@@ -268,6 +284,8 @@ func writeReplayError(w http.ResponseWriter, err error) {
 		errors.Is(err, game.ErrLeverageExceedsMax),
 		errors.Is(err, game.ErrInsufficientBalance):
 		writeAPIError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, game.ErrReplayGameNotFinished):
+		writeAPIError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, game.ErrReplayNoInterval):
 		writeAPIError(w, http.StatusConflict, err.Error())
 	default:
@@ -350,6 +368,13 @@ func replayPositionToAPI(p game.ReplayPositionView) apigen.ReplayPosition {
 		v := p.UnrealizedPnl.String()
 		out.UnrealizedPnl = &v
 	}
+	if p.ClosedDay != nil {
+		v := *p.ClosedDay
+		out.ClosedDay = &v
+	}
+	if p.ClosedDate != nil {
+		out.ClosedDate = &openapiTypes.Date{Time: *p.ClosedDate}
+	}
 	return out
 }
 
@@ -371,6 +396,7 @@ func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 		PublishedDays:      s.PublishedDays,
 		Pairs:              replayPairsToAPI(s.Pairs),
 		Positions:          replayPositionsToAPI(s.Positions),
+		ClosedPositions:    replayPositionsToAPI(s.ClosedPositions),
 		CandlesByPair:      replayPairCandlesToAPI(s.Candles),
 		TotalUnrealizedPnl: s.TotalUnrealizedPnl.String(),
 	}
@@ -385,6 +411,34 @@ func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 		out.FinalFunds = &v
 	}
 	return out
+}
+
+func replayResultToAPI(res game.ReplayResult) apigen.ReplayGameResult {
+	history := make([]apigen.ReplayAssetPoint, 0, len(res.AssetHistory))
+	for _, p := range res.AssetHistory {
+		history = append(history, apigen.ReplayAssetPoint{
+			Day:    p.Day,
+			Date:   openapiTypes.Date{Time: p.Date},
+			Equity: p.Equity.String(),
+		})
+	}
+	return apigen.ReplayGameResult{
+		GameId:           res.GameID,
+		Status:           res.Status,
+		StartYear:        res.StartYear,
+		IntervalStart:    openapiTypes.Date{Time: res.IntervalStart},
+		IntervalEnd:      openapiTypes.Date{Time: res.IntervalEnd},
+		FinalFunds:       res.FinalFunds.String(),
+		Rank:             res.Rank,
+		Participants:     res.Participants,
+		IsPersonalBest:   res.IsPersonalBest,
+		MaxProfit:        res.MaxProfit.String(),
+		MaxLoss:          res.MaxLoss.String(),
+		WinRate:          res.WinRate.String(),
+		LiquidationCount: res.LiquidationCount,
+		MaxFunds:         res.MaxFunds.String(),
+		AssetHistory:     history,
+	}
 }
 
 func replayRankingToAPI(entries []game.ReplayRankingEntry) []apigen.ReplayRankingEntry {

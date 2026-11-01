@@ -60,6 +60,7 @@ func seedReplayRates(t *testing.T, pool *pgxpool.Pool) []db.CurrencyPair {
 
 	// 過去の失敗で残った行を子テーブルから順に掃除。
 	for _, s := range []string{
+		`DELETE FROM replay_leverage_unlock_payments`,
 		`DELETE FROM replay_positions`,
 		`DELETE FROM replay_leverage_unlocks`,
 		`DELETE FROM replay_speed_changes`,
@@ -103,6 +104,7 @@ func seedReplayRates(t *testing.T, pool *pgxpool.Pool) []db.CurrencyPair {
 	t.Cleanup(func() {
 		cctx := context.Background()
 		for _, s := range []string{
+			`DELETE FROM replay_leverage_unlock_payments`,
 			`DELETE FROM replay_positions`,
 			`DELETE FROM replay_leverage_unlocks`,
 			`DELETE FROM replay_speed_changes`,
@@ -262,6 +264,7 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 				Day int `json:"day"`
 			} `json:"candles"`
 		} `json:"candlesByPair"`
+		ClosedPositions []json.RawMessage `json:"closedPositions"`
 	}
 	if err := json.Unmarshal(st.Body.Bytes(), &state); err != nil {
 		t.Fatalf("decode state: %v", err)
@@ -269,12 +272,28 @@ func TestReplayAPI_NoFutureOrDates(t *testing.T) {
 	if state.PublishedDays != 0 {
 		t.Errorf("publishedDays = %d, want 0", state.PublishedDays)
 	}
+	// #127: 決済済み建玉は無くても空配列で返る（null ではない）。
+	if state.ClosedPositions == nil || len(state.ClosedPositions) != 0 {
+		t.Errorf("closedPositions = %v, want empty array", state.ClosedPositions)
+	}
 	for _, pc := range state.CandlesByPair {
 		for _, c := range pc.Candles {
 			if c.Day > 19 {
 				t.Errorf("state response leaks future candle day %d", c.Day)
 			}
 		}
+	}
+
+	// #127: 終了前の結果 API は 409 で、日付も返さない。
+	beforeResult := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/replay/games/"+itoa(started.GameId)+"/result", nil)
+	req.Header.Set("Authorization", auth)
+	mux.ServeHTTP(beforeResult, req)
+	if beforeResult.Code != http.StatusConflict {
+		t.Fatalf("result before finish status = %d, body=%s", beforeResult.Code, beforeResult.Body.String())
+	}
+	if datePattern.MatchString(beforeResult.Body.String()) {
+		t.Errorf("result-before-finish response contains a date string: %s", beforeResult.Body.String())
 	}
 
 	// 注文レスポンスも未来の価格・日付を含まない。

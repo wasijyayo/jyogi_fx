@@ -22,6 +22,7 @@ func cleanupReplayRankingRows(t *testing.T, pool *pgxpool.Pool, gameIDs []int64,
 	cctx := context.Background()
 	if len(gameIDs) > 0 {
 		for _, table := range []string{
+			"replay_leverage_unlock_payments",
 			"replay_positions",
 			"replay_leverage_unlocks",
 			"replay_speed_changes",

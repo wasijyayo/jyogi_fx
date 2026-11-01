@@ -356,6 +356,46 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/replay/games/{gameId}/result:
+    get:
+      operationId: getReplayGameResult
+      summary: 過去チャートモードのゲーム結果を取得する（終了後のみ）
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayGameResult"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲームが存在しない（またはトークンが合わない）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: ゲームがまだ終了していない
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/replay/games/{gameId}/orders:
     post:
       operationId: placeReplayOrder
@@ -1022,6 +1062,15 @@ components:
           type: string
           nullable: true
           description: 含み損益（公開済みの最新の終値で計算。未決済の建玉のみ。決済済みや他 API では null）
+        closedDay:
+          type: integer
+          nullable: true
+          description: 決済した日（通し番号 0..79）。未決済の建玉は null
+        closedDate:
+          type: string
+          format: date
+          nullable: true
+          description: 決済した日の正確な日付（終了後にのみセット。終了前は常に null）
 
     ReplayGameState:
       type: object
@@ -1034,6 +1083,7 @@ components:
         - publishedDays
         - pairs
         - positions
+        - closedPositions
         - candlesByPair
         - totalUnrealizedPnl
       properties:
@@ -1059,6 +1109,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReplayPosition"
+        closedPositions:
+          type: array
+          description: 決済済み・強制決済済みの建玉（損益・決済日・強制決済かどうかを含む）
+          items:
+            $ref: "#/components/schemas/ReplayPosition"
         totalUnrealizedPnl:
           type: string
           description: 未決済建玉の含み損益の合計（decimal文字列。建玉が無ければ "0"）
@@ -1080,6 +1135,92 @@ components:
           type: string
           nullable: true
           description: スコア（最終資金。終了後にのみセット）
+
+    ReplayGameResult:
+      type: object
+      required:
+        - gameId
+        - status
+        - startYear
+        - intervalStart
+        - intervalEnd
+        - finalFunds
+        - rank
+        - participants
+        - isPersonalBest
+        - maxProfit
+        - maxLoss
+        - winRate
+        - liquidationCount
+        - maxFunds
+        - assetHistory
+      properties:
+        gameId:
+          type: integer
+          format: int64
+        status:
+          type: string
+          description: finished / early_finished
+        startYear:
+          type: integer
+        intervalStart:
+          type: string
+          format: date
+          description: 区間の開始日（結果 API は終了後のみのため必ずセットされる）
+        intervalEnd:
+          type: string
+          format: date
+          description: 区間の終了日（結果 API は終了後のみのため必ずセットされる）
+        finalFunds:
+          type: string
+          description: スコア（最終資金。decimal文字列）
+        rank:
+          type: integer
+          description: 順位（1 始まり。既存ランキングと同じ並び）
+        participants:
+          type: integer
+          description: ランキングの参加行数（ログインユーザーは 1 人 1 行、ゲストは 1 プレイ 1 行）
+        isPersonalBest:
+          type: boolean
+          description: ログインユーザーの自己ベストを更新したか（ゲストは false）
+        maxProfit:
+          type: string
+          description: 決済した建玉のうち最大の利益（無ければ "0"）
+        maxLoss:
+          type: string
+          description: 決済した建玉のうち最大の損失（負値。無ければ "0"）
+        winRate:
+          type: string
+          description: 勝率（%。決済した建玉のうち損益が正の割合。小数2桁に丸める）
+        liquidationCount:
+          type: integer
+          description: 強制決済の回数
+        maxFunds:
+          type: string
+          description: ゲーム中の最大資産（初期資金を含む。decimal文字列）
+        assetHistory:
+          type: array
+          description: 区間 60 営業日分の資産推移（建玉・日足・上限解放の支払いログから計算）
+          items:
+            $ref: "#/components/schemas/ReplayAssetPoint"
+
+    ReplayAssetPoint:
+      type: object
+      required:
+        - day
+        - date
+        - equity
+      properties:
+        day:
+          type: integer
+          description: 通し番号（20..79）
+        date:
+          type: string
+          format: date
+          description: 正確な日付（結果 API は終了後のみのため必ずセットされる）
+        equity:
+          type: string
+          description: その日の終値時点の資産（decimal文字列）
 
     ReplayOrderRequest:
       type: object
