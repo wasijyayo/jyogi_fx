@@ -9,6 +9,15 @@
   border-bottom: 1px solid #e2e2e2;
 }
 
+/* PC ではヘッダーの高さを固定し、過去チャートモードの 3 列が画面内に収まるようにする
+   （#138 REPLAY-13。ReplayPage.module.css の .gameMain がこの高さを引く）。 */
+@media (min-width: 1024px) {
+  .header {
+    height: 58px;
+    flex-wrap: nowrap;
+  }
+}
+
 .brand {
   font-weight: 700;
   font-size: 18px;

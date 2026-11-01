@@ -254,17 +254,32 @@ export default function ReplayChart({ pairId, candles, positions }: ReplayChartP
     for (const line of priceLinesRef.current) {
       series.removePriceLine(line);
     }
-    priceLinesRef.current = positions.map((pos) =>
-      series.createPriceLine({
-        // 強制決済ラインも描画用の数値にする（金額計算はサーバーの decimal）。
-        price: Number(pos.liquidationLine),
-        color: '#ff9800',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: `${pos.side === 'short' ? '売り' : '買い'} 強制決済`,
-      }),
-    );
+    // 建値ラインと強制決済ラインを色・線種・ラベルで区別する（#138 REPLAY-13）。
+    // 建値は買い・売りの両方を出し、強制決済ラインは従来どおり残す。
+    const lines: IPriceLine[] = [];
+    for (const pos of positions) {
+      const side = pos.side === 'short' ? '売り' : '買い';
+      lines.push(
+        series.createPriceLine({
+          // 描画用の数値にする（金額計算はサーバーの decimal。CLAUDE.md §5.2）。
+          price: Number(pos.entryPrice),
+          color: '#1e6fd9',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `${side} 建値`,
+        }),
+        series.createPriceLine({
+          price: Number(pos.liquidationLine),
+          color: '#ff9800',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: `${side} 強制決済`,
+        }),
+      );
+    }
+    priceLinesRef.current = lines;
   }, [positions]);
 
   return <div ref={containerRef} className={styles.chart} />;

@@ -7,6 +7,76 @@
   gap: 12px;
 }
 
+/* PC（1024px 以上）では 3 列にして、ページ全体をスクロールさせない（#138 REPLAY-13）。
+   左: 保有 / 中央: チャートと注文 / 右: 出来事。溢れるのは各欄の中だけにする。 */
+@media (min-width: 1024px) {
+  .gameMain {
+    max-width: 1600px;
+    height: calc(100vh - 58px);
+    height: calc(100dvh - 58px);
+    padding: 12px 16px;
+    overflow: hidden;
+  }
+}
+
+.gameGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+/* スマホは今までどおり縦積み（中央 → 保有 → 出来事の順）。 */
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.columnCenter {
+  order: 1;
+}
+
+.columnLeft {
+  order: 2;
+}
+
+.columnRight {
+  order: 3;
+}
+
+@media (min-width: 1024px) {
+  .gameGrid {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr) 250px;
+    grid-template-areas: 'left center right';
+    gap: 12px;
+  }
+
+  .column {
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .columnLeft {
+    grid-area: left;
+    order: initial;
+  }
+
+  .columnCenter {
+    grid-area: center;
+    order: initial;
+  }
+
+  .columnRight {
+    grid-area: right;
+    order: initial;
+  }
+}
+
 /* 強制決済の演出（#129 REPLAY-12）。画面を揺らして赤く点滅させる。
    演出は見た目だけで、注文・決済の操作は止めない。 */
 .liquidating {
@@ -109,6 +179,15 @@
 .heading {
   margin: 0 0 8px;
   font-size: 17px;
+}
+
+/* 右列の出来事枠（#116 で使う。今はプレースホルダのみ。 #138 REPLAY-13）。 */
+.eventsCard {
+  min-height: 100px;
+}
+
+.positionsCard {
+  min-width: 0;
 }
 
 .sub {
@@ -248,6 +327,28 @@
   gap: 12px;
 }
 
+/* 「取引開始」直後の不透明な最前面の画面（#138 REPLAY-13）。 */
+.countdownOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  box-sizing: border-box;
+  background: #05070b;
+  color: #f5f5f0;
+}
+
+.countdownPreparing {
+  margin: 0;
+  color: #9aa4b2;
+  font-size: 14px;
+}
+
 .countdownLabel {
   margin: 0;
   color: #9aa4b2;
@@ -345,6 +446,34 @@
   gap: 10px;
 }
 
+/* 刻みボタンとスライダー（#138 REPLAY-13）。 */
+.stepRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.stepButton {
+  padding: 4px 7px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  background: #fff;
+  color: #333;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.stepButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.slider {
+  width: 100%;
+  margin-top: 4px;
+}
+
 .actions {
   display: flex;
   align-items: center;
@@ -401,13 +530,39 @@
 /* 進行状況 */
 .status {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 16px;
   padding: 14px 16px;
   border: 1px solid #e2e2e2;
   border-radius: 8px;
   background: #fff;
+}
+
+/* 資金と含み損益は進行状況と同じ帯に常時出す（#138 REPLAY-13）。 */
+.money {
+  display: flex;
+  gap: 18px;
+}
+
+.moneyItem {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.moneyLabel {
+  color: #666;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.moneyValue {
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 
 .era {
@@ -651,6 +806,43 @@
   border-top: none;
 }
 
+/* 左サイドバーの建玉（#138 REPLAY-13）。ペア・向き・含み損益・決済は常に表示し、
+   証拠金の追加や建値などの詳細だけを行を開いて見せる。 */
+.positionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.positionHead .secondary {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.positionHead > :nth-child(2) {
+  margin-left: auto;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.positionToggle {
+  margin-top: 4px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: #1e6fd9;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.positionDetails {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f7f9fc;
+}
+
 .positionMain {
   display: flex;
   align-items: baseline;
@@ -808,6 +1000,21 @@
 .rankingScore {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1023px) {
+  .status {
+    grid-template-columns: auto 1fr;
+    gap: 10px 16px;
+  }
+
+  .money {
+    grid-column: 1 / -1;
+  }
+
+  .controls {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 720px) {

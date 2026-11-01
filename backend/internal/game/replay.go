@@ -38,9 +38,9 @@ const (
 	replayPreDays = 20
 	// replayStandardDayDuration は標準の速さ（×1）で 1 営業日を公開する間隔（§13「1 ゲームの流れ」）。
 	replayStandardDayDuration = 3 * time.Second
-	// replayBeginCountdown は「取引開始」から時間が動き始めるまでの猶予（#126 REPLAY-9）。
-	// begin は started_at を「現在時刻 + この値」にし、画面はその間 3・2・1 を出す。
-	replayBeginCountdown = 3 * time.Second
+	// replayBeginCountdown は「取引開始」から時間が動き始めるまでの猶予（#126 REPLAY-9・#138 REPLAY-13）。
+	// begin は started_at を「現在時刻 + この値」にし、画面はその間 5・4・3・2・1 を出す。
+	replayBeginCountdown = 5 * time.Second
 	// replayLeverageUnlockBaseCost は上限解放 1 段目の費用（§13。以降は段ごとに 2 倍）。
 	replayLeverageUnlockBaseCost = 250
 	// replayLeverageUnlockStep は上限解放 1 段あたりの +レバレッジ（§13）。
@@ -729,7 +729,7 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		TokenHash: hashReplayToken(token),
 		UserID:    playerUserID,
 		GuestName: playerGuestName,
-		// ready の間は時間が動かない。begin で「その時刻 + 3 秒」に上書きする（#126）。
+		// ready の間は時間が動かない。begin で「その時刻 + 5 秒」に上書きする（#126・#138）。
 		StartedAt: pgtype.Timestamptz{Time: now, Valid: true},
 		StartYear: int32(days[replayPreDays].Year()),
 		Funds:     decimal.NewFromInt(replayInitialFunds),
@@ -811,8 +811,8 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 }
 
 // BeginGame は「取引開始」を押したときに、ゲームを ready から playing にする
-// （#126 REPLAY-9）。started_at は「そのときの時刻 + 3 秒」にし、その 3 秒は画面の
-// カウントダウンに使う。時刻は Clock から取る（CLAUDE.md §5.1）。
+// （#126 REPLAY-9・#138 REPLAY-13）。started_at は「そのときの時刻 + 5 秒」にし、
+// その 5 秒は画面のカウントダウンに使う。時刻は Clock から取る（CLAUDE.md §5.1）。
 //
 // すでに playing のゲームに対して呼ばれた場合は開始時刻を変えず、現在の状態を返す
 // （二重押しでスタートがずれないようにする）。終了済みなら ErrReplayGameFinished。

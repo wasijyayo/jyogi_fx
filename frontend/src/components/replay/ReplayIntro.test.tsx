@@ -4,13 +4,6 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import ReplayIntro from './ReplayIntro';
 import type { ReplaySession } from '../../lib/replay';
 
-// 生成された API hooks を差し替える（ネットワークは叩かない）。
-vi.mock('../../api/generated/api', () => ({
-  useBeginReplayGame: vi.fn(),
-}));
-
-import { useBeginReplayGame } from '../../api/generated/api';
-
 const session = {
   gameId: 42,
   token: 'token-42',
@@ -26,26 +19,10 @@ const session = {
   },
 } as ReplaySession;
 
-type BeginOptions = {
-  mutation?: {
-    onSuccess?: (res: { status: number; data: unknown }) => void;
-    onError?: () => void;
-  };
-};
-
 describe('ReplayIntro', () => {
-  const mutate = vi.fn();
-  let lastOptions: BeginOptions | undefined;
-
   beforeEach(() => {
     vi.useFakeTimers();
     window.localStorage.clear();
-    mutate.mockReset();
-    lastOptions = undefined;
-    vi.mocked(useBeginReplayGame).mockImplementation(((options: BeginOptions) => {
-      lastOptions = options;
-      return { mutate, isPending: false } as never;
-    }) as never);
   });
 
   afterEach(() => {
@@ -57,9 +34,11 @@ describe('ReplayIntro', () => {
     delete window.matchMedia;
   });
 
-  it('初回は年 → 新聞の順に出し、取引開始でカウントダウンしてから開始する', () => {
-    const onBegun = vi.fn();
-    render(<ReplayIntro session={session} onBegun={onBegun} />);
+  it('初回は年 → 新聞の順に出し、取引開始で親に知らせる', () => {
+    const onStart = vi.fn();
+    render(
+      <ReplayIntro session={session} onStart={onStart} starting={false} error={null} />,
+    );
 
     // 暗転して年が出る。
     expect(screen.getByText('2020年')).toBeTruthy();
@@ -72,64 +51,51 @@ describe('ReplayIntro', () => {
     expect(beginButton).toBeTruthy();
 
     fireEvent.click(beginButton);
-    expect(mutate).toHaveBeenCalledWith({ gameId: 42 });
-
-    act(() => {
-      lastOptions?.mutation?.onSuccess?.({ status: 200, data: {} });
-    });
-    // 3 から始まり、押すまでサーバーの時間は動かない（begin 後にカウントダウン）。
-    expect(screen.getByRole('status').textContent).toBe('3');
-    expect(onBegun).not.toHaveBeenCalled();
-
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    expect(onBegun).toHaveBeenCalledTimes(1);
+    expect(onStart).toHaveBeenCalledTimes(1);
   });
 
   it('2 回目以降は年の演出を飛ばして新聞から始める', () => {
     window.localStorage.setItem('fxgame.replayIntroSeen', '1');
 
-    render(<ReplayIntro session={session} onBegun={vi.fn()} />);
+    render(
+      <ReplayIntro session={session} onStart={vi.fn()} starting={false} error={null} />,
+    );
 
     expect(screen.getByRole('button', { name: '取引開始' })).toBeTruthy();
-    expect(screen.queryByRole('status')).toBeNull();
   });
 
   it('スキップで年の演出を飛ばせる', () => {
-    const onBegun = vi.fn();
-    render(<ReplayIntro session={session} onBegun={onBegun} />);
+    render(
+      <ReplayIntro session={session} onStart={vi.fn()} starting={false} error={null} />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'スキップ' }));
 
     expect(screen.getByRole('button', { name: '取引開始' })).toBeTruthy();
-    expect(onBegun).not.toHaveBeenCalled();
   });
 
-  it('prefers-reduced-motion では年を出さず、カウントダウンも短くする', () => {
+  it('prefers-reduced-motion では年を出さず、すぐ新聞にする', () => {
     window.matchMedia = vi.fn().mockReturnValue({ matches: true }) as never;
-    const onBegun = vi.fn();
 
-    render(<ReplayIntro session={session} onBegun={onBegun} />);
+    render(
+      <ReplayIntro session={session} onStart={vi.fn()} starting={false} error={null} />,
+    );
 
-    // 年の画面を挟まず、すぐ新聞。
     expect(screen.getByRole('button', { name: '取引開始' })).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: '取引開始' }));
-    act(() => {
-      lastOptions?.mutation?.onSuccess?.({ status: 200, data: {} });
-    });
-    expect(screen.getByRole('status').textContent).toBe('1');
+  it('begin に失敗したメッセージを出す', () => {
+    window.localStorage.setItem('fxgame.replayIntroSeen', '1');
 
-    act(() => {
-      vi.advanceTimersByTime(1000);
-    });
-    expect(onBegun).toHaveBeenCalledTimes(1);
+    render(
+      <ReplayIntro
+        session={session}
+        onStart={vi.fn()}
+        starting={false}
+        error="取引を開始できませんでした"
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toBe('取引を開始できませんでした');
   });
 });
