@@ -432,7 +432,7 @@ DATABASE_URL='postgres://...（本番 Neon の接続 URL）...' \
 
 - 4 ペア × 2015 年以降の全ファイル分を、ペアごとに `--pair` を変えて実行する。
 - マイグレーション（`000009_historical_rates`）は事前に適用しておく（§2 の `migrate-up`）。
-  本番へのマイグレーション適用は人間が手動で行う（AGENTS.md）。
+  本番には main へのマージ時に `deploy.yml` が適用する（§4.1）。
 - 取り込み後の画面表示（出典表示・チャート）は #105 で実装する。
 
 ---
@@ -500,7 +500,7 @@ CLAUDE.md §5 の禁止事項のうち、機械的に判定できるものを `f
 ### `.github/workflows/deploy.yml`
 
 `ci.yml`が`main`へのpushで成功した後にだけ`workflow_run`で起動し、
-`gcloud run deploy fxgame --source .`を実行する（§2.1と同じコマンド）。
+本番 DB に `migrate up` を適用してから、`gcloud run deploy fxgame --source .`を実行する（§2.1と同じコマンド）。マイグレーションが失敗したらデプロイしない（#135）。
 Cloud Run実行時の環境変数（`DATABASE_URL`・`DISCORD_*`等）はここでは一切触らない
 （env系フラグを付けなければ既存リビジョンの値を引き継ぐCloud Runの仕様を利用している）。
 
@@ -512,6 +512,17 @@ variables → Actions → Variables）:**
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Workload Identity Federationのプロバイダのフルリソース名 |
 | `GCP_SERVICE_ACCOUNT` | デプロイに使うサービスアカウントのメールアドレス |
 | `GCP_PROJECT_ID` | `jyogi-fx` |
+
+**必要な Actions Secret（Settings → Secrets and variables → Actions → Secrets）:**
+
+| Secret 名 | 内容 |
+|---|---|
+| `PROD_DATABASE_URL` | 本番 Neon の接続 URL。`migrate` はアドバイザリロックを使うので、`-pooler` の付かない直接接続の URL を使う |
+
+未設定だと`deploy`ジョブは失敗し、デプロイされない。プレビューや PR のコードにはこの Secret を渡さない。
+
+マイグレーションが途中で失敗すると、以後の`migrate up`は `Dirty database` で止まる。
+原因を直してから、手元で`migrate ... force <正しいバージョン>`を実行し、ジョブを再実行する。
 
 いずれか（`GCP_WORKLOAD_IDENTITY_PROVIDER`）が未設定の間、`deploy`ジョブは自動的に
 スキップされる（失敗はしない）。長期有効なサービスアカウントJSONキーより安全な

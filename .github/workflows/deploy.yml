@@ -70,6 +70,23 @@ jobs:
           oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
           (cd backend && sqlc generate)
 
+      # デプロイの前に本番 DB へマイグレーションを適用する（#135 DEPLOY-4）。
+      # 失敗したらデプロイしない。適用からデプロイ完了までは古いコードが新しいスキーマで
+      # 動くので、マイグレーションは後方互換にすること。
+      # 本番への適用に使うため、バージョンを固定する。
+      - name: Install golang-migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.0
+
+      - name: Apply migrations to production
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          if [ -z "$PROD_DATABASE_URL" ]; then
+            echo "::error::Secret PROD_DATABASE_URL が未設定のためデプロイを中止します（dev-guide.md §4.1）"
+            exit 1
+          fi
+          migrate -path backend/db/migrations -database "$PROD_DATABASE_URL" up
+
       - id: auth
         uses: google-github-actions/auth@v2
         with:
