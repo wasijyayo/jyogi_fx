@@ -1641,6 +1641,39 @@ func TestReplay_RankingContinuesAfterFailedGame(t *testing.T) {
 	}
 }
 
+// TestReplay_ResultWhileReady は「取引開始」前（ready）のゲームに対して GetResult が
+// ErrReplayGameNotFinished を返し、結果（区間の日付など）を漏らさないことを確認する
+// （#126 REPLAY-9 の ready 状態と #127 REPLAY-10 の結果 API の整合）。
+func TestReplay_ResultWhileReady(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	dates := replayTestDates(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
+	insertReplayData(t, ctx, pool, dates, constantBar("100", "105", "95", "100"))
+
+	clock := &replayTestClock{now: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)}
+	svc := newReplayServiceForTest(pool, clock)
+
+	// StartGame 直後は ready で、まだ時間が動いていない。
+	res, err := svc.StartGame(ctx, "", "ready-tester")
+	if err != nil {
+		t.Fatalf("StartGame: %v", err)
+	}
+	state, err := svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state.Status != replayStatusReady {
+		t.Fatalf("status after StartGame = %s, want %s", state.Status, replayStatusReady)
+	}
+
+	// ready の間は結果を返さない（終了前として扱う）。
+	if _, err := svc.GetResult(ctx, res.Token, res.GameID); !errors.Is(err, ErrReplayGameNotFinished) {
+		t.Fatalf("GetResult while ready = %v, want ErrReplayGameNotFinished", err)
+	}
+}
+
 // TestReplay_Result は決済・強制決済・上限解放を含むゲームで、結果 API の集計値と
 // 資産推移が正しいことを確認する（#127 REPLAY-10 完了条件）。
 func TestReplay_Result(t *testing.T) {
