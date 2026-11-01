@@ -907,6 +907,11 @@ func (s *ReplayService) finishExpiredGames(ctx context.Context, now time.Time) e
 	for _, id := range ids {
 		game, err := q.GetReplayGameByIDForUpdate(ctx, id)
 		if err != nil {
+			// 一覧取得とロックの間に削除されたゲーム（不適切なゲスト名の削除など）は
+			// 集計対象から外す。並列実行されるテストの後始末でも同じ競合が起きうる。
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
 			return fmt.Errorf("get replay game for update: %w", err)
 		}
 		c, err := loadReplayCtx(ctx, q, game.ID)
