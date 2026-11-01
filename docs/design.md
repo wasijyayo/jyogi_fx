@@ -1292,6 +1292,89 @@ CREATE INDEX idx_daily_rates_pair_date ON daily_rates (pair_id, date);
 4 ペアの投入は `000003_seed_currencies` と同じくマイグレーションで行う（`ON CONFLICT DO NOTHING`）。
 取り込みは `ON CONFLICT DO NOTHING`（上書きしない。値を直すなら新しいデータセット）。
 
+### 過去チャートモードのゲーム進行テーブル（#103 REPLAY-3）
+
+§13「データモデル（概要）」で設計したゲーム進行のテーブル。通常モードの `positions` / `trades` とは
+別テーブル（`replay_*`）。DDL はマイグレーション `000010_replay_games` で確定。金額・価格は
+`NUMERIC(20,8)`（CLAUDE.md §5.2）。通貨ペアは行として扱う（CLAUDE.md §5.3）。
+
+```sql
+-- currency_pairs.fee_rate を追加（過去チャートモードの片道手数料率。通常モードと同じ 0.05%）。
+ALTER TABLE currency_pairs
+    ADD COLUMN fee_rate NUMERIC(8,6) NOT NULL DEFAULT 0.000500;
+
+CREATE TABLE replay_games (
+    id          BIGSERIAL      PRIMARY KEY,
+    token_hash  TEXT           NOT NULL UNIQUE,   -- ゲームトークンの SHA-256（hex）
+    user_id     TEXT           REFERENCES users(discord_id),  -- NULL = ゲスト
+    guest_name  TEXT,           -- ゲスト名（前後の空白を除いて 1〜16 文字）
+    started_at  TIMESTAMPTZ    NOT NULL,
+    start_year  INT            NOT NULL,
+    status      TEXT           NOT NULL,          -- playing / finished / early_finished
+    funds       NUMERIC(20,8)  NOT NULL,
+    final_funds NUMERIC(20,8),                    -- スコア（確定時にセット）
+    finished_at TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    CONSTRAINT replay_games_player_check CHECK (
+        (user_id IS NULL AND guest_name IS NOT NULL) OR
+        (user_id IS NOT NULL AND guest_name IS NULL)
+    )
+);
+
+-- 80 営業日（開始前 20 日 + 区間 60 日）の通し番号 → 日付。
+CREATE TABLE replay_game_days (
+    game_id     BIGINT NOT NULL REFERENCES replay_games(id),
+    day_index   INT    NOT NULL,   -- 0..79（0〜19 開始前、20〜79 区間）
+    date        DATE   NOT NULL,
+    PRIMARY KEY (game_id, day_index)
+);
+
+-- ゲームが使った日足の行そのもの（80 日 × 全ペア）を開始時に記録する。各ペア・各日付で
+-- imported_at 最新のデータセットの日足を daily_rate_id で参照し、以降の約定・強制決済・
+-- 状態取得はこの表経由で読む（後からデータセットが増えてもゲームの値は変わらない）。
+CREATE TABLE replay_game_rates (
+    game_id       BIGINT NOT NULL REFERENCES replay_games(id),
+    pair_id       BIGINT NOT NULL REFERENCES currency_pairs(id),
+    day_index     INT    NOT NULL,   -- replay_game_days の通し番号（0..79）
+    daily_rate_id BIGINT NOT NULL REFERENCES daily_rates(id),
+    PRIMARY KEY (game_id, pair_id, day_index)
+);
+
+-- 速さ（×1/×2/×3）の変更履歴。
+CREATE TABLE replay_speed_changes (
+    id          BIGSERIAL    PRIMARY KEY,
+    game_id     BIGINT       NOT NULL REFERENCES replay_games(id),
+    changed_at  TIMESTAMPTZ  NOT NULL,
+    speed       INT          NOT NULL
+);
+
+-- 建玉（分離マージン）。取引規模 = initial_margin × leverage。margin は追加分込み。
+CREATE TABLE replay_positions (
+    id             BIGSERIAL      PRIMARY KEY,
+    game_id        BIGINT         NOT NULL REFERENCES replay_games(id),
+    pair_id        BIGINT         NOT NULL REFERENCES currency_pairs(id),
+    side           TEXT           NOT NULL,   -- long / short
+    initial_margin NUMERIC(20,8)  NOT NULL,
+    margin         NUMERIC(20,8)  NOT NULL,
+    leverage       INT            NOT NULL,
+    entry_price    NUMERIC(20,8)  NOT NULL,
+    entry_day      INT            NOT NULL,
+    status         TEXT           NOT NULL,   -- open / closed / liquidated
+    closed_day     INT,
+    close_price    NUMERIC(20,8),
+    pnl            NUMERIC(20,8),
+    created_at     TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+
+-- 上限解放の段数（ゲーム × 通貨ペア）。1 段 = +10 倍、費用は 250 から倍々。
+CREATE TABLE replay_leverage_unlocks (
+    game_id     BIGINT NOT NULL REFERENCES replay_games(id),
+    pair_id     BIGINT NOT NULL REFERENCES currency_pairs(id),
+    tier        INT    NOT NULL,
+    PRIMARY KEY (game_id, pair_id)
+);
+```
+
 ### UPSERT（冪等性の確保）
 
 ```sql
@@ -1619,11 +1702,12 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
 ### 1 ゲームの流れ（標準の速さで 1 回 3 分）
 
 1. **開始**: 2015 年以降の 60 営業日の区間をランダムに選ぶ。**4 ペアとも同じ区間**を同時に進める。
-   仮想資金 1000 で開始。**区間の年月を表示する**（例:「2020年3月」、#111 で決定）。
+   仮想資金 1000 で開始。**開始年だけを表示する**（例:「2020年」、#118 で決定）。
+   月日・正確な区間は終了時に明かす。
 2. **プレイ**: 標準の速さでは **3 秒ごとに 1 営業日ずつ**ローソク足が公開される（60 本 = 3 分）。
-   - **一時停止はできない。速さは変えられる**（例: ×1・×3。段階は #105 で決める）。
+   - **一時停止はできない。速さは変えられる**（×1・×2・×3。追加決定）。
    - ペアを切り替えて、買い・売りの注文と決済を何回でもできる。**複数のペアを同時に保有できる**。
-   - 正確な日付は表示しない。
+   - 正確な日付は表示しない（日足は日付の代わりに通し番号で返す）。
 3. **終了**: 最後の日が公開されたら、未決済建玉を**最後の終値**で決済し、スコアを確定する。
    **この時点で区間の正確な日付を明かす**（例: 「2020 年 3 月 2 日〜5 月 22 日の相場でした」）。
 
@@ -1702,13 +1786,13 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
 
 サーバーは「開始からの経過時間」から公開済みの営業日数を計算し、
 **それより先の価格は返さない**。区間の正確な日付も終了までどの API からも取得できない
-（年月は開始時から公開する）。
+（開始年は開始時から公開する）。
 
 - 注文はサーバーが現在の公開レートで約定させる。ブラウザから価格を指定させない。
-- **公開されている過去データとの照合は防がない（許容する）。** 年月と値動きが見えるので、
+- **公開されている過去データとの照合は防がない（許容する）。** 開始年と値動きが見えるので、
   プレイヤーが同じ過去データを調べれば区間を特定でき、先の値動きも分かる。
   仲間内のゲームで、過去の相場を知っていること自体も実力のうちと考え、価格の加工などの対策はしない。
-  問題になったら、年月を伏せる・価格を一定の比率でずらすなどを検討する。
+  問題になったら、開始年を伏せる・価格を一定の比率でずらすなどを検討する。
 - ゲストには、ゲーム開始時に推測できないゲームトークンを発行し、以降の操作はそのトークンで行う。
 
 ### §9.1（実レート連動の却下）との関係
@@ -1734,6 +1818,37 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
   （状態取得・ランキング取得のときに、終了時刻を過ぎたゲームを確定させる）。
 - 時刻は `Clock` から受け取る（CLAUDE.md §5.1）。テストでは固定クロックでゲームの終わりまで一瞬で進める。
 
+### 実装の詳細（#103 で確定）
+
+マネージャーが PR #103 で確定させた仕様。実装は `internal/game/replay.go`。
+
+- **公開日数の数え方**: 開始時点（経過 0 秒）で公開済みなのは「開始前の 20 営業日」だけ。そこから
+  標準の速さで 3 秒ごとに区間の 1 日目・2 日目…と公開され、60 日目が公開された時点で終了。
+  開始直後の注文は開始前 20 日の最後の終値で約定する。速さ（×1・×2・×3）は変更履歴
+  （変更した時刻と速さ）をサーバーに保存し、区間ごとの経過時間 × 速さを足し合わせて公開日数を求める。
+  ブラウザから時刻は受け取らない。
+- **データセットの選び方**: 各ペア・各日付について、そのゲームの開始時点で一番新しく取り込まれた
+  （`imported_at` が最新の）データセットの値を使う。ゲームが使った日足の行（80 日 × 全ペア）を
+  別テーブル（ゲーム × 通貨ペア × 日）に記録し、以降はそれだけを読む（後からデータセットが増えても、
+  そのゲームの値は変わらない）。
+- **区間の選び方**: 対象は `currency_pairs` の全行（コードにペアを書かない）。全ペアに値がある
+  平日（共通の日）を日付順に並べ、連続する 80 日（開始前 20 日 + 区間 60 日）をランダムに選ぶ。
+  区間の最終日は 2015-01-01 以降で、今日（Clock の日付）から平日を数えて 60 日以上前であること。
+  条件を満たす区間が無ければエラー。乱数は注入できる。
+- **強制決済の値段**: 建玉を持った日の次の公開日から判定する。ラインに届いたら、その日に
+  「ラインの値段」で決済する（戻る額 = max(0, 証拠金 + 損益 − 決済の手数料)）。最終日も、
+  先に強制決済を判定してから残りを最終日の終値で決済する。
+- **遅延評価の順番**: リクエストが来たら、まず「公開済みの日までの強制決済」→「終了していれば確定」→
+  「早期終了の判定」の順に処理してから、そのリクエストを扱う。同時のリクエストで二重に処理しないよう、
+  ゲームの行をロック（`SELECT ... FOR UPDATE`）する。
+- **手数料率**: 通常モードと同じ 0.05%。コードに書かず、`currency_pairs.fee_rate`（NUMERIC、0.000500）に
+  持たせる。初期資金 1000・最低証拠金 1・上限解放（+10 倍、250 から倍々）は `internal/game` の定数。
+- **金額**: すべて decimal。DB は NUMERIC(20,8)。小数第 8 位で丸める。証拠金は整数（1 以上）、
+  レバレッジは整数（1 以上、そのペアの今の上限以下）。
+- **終了後**: 確定したゲームの状態取得では、区間の正確な日付（開始日・終了日、各日足の日付）と
+  最終資金を返す。終了前は**どの API も日付を返さない**（日足は日付の代わりに通し番号で返す）。
+  年（開始年）は開始時から返す。
+
 ### データモデル（概要）
 
 テーブル（過去レート・ゲーム・ランキング用）は、通常モードの `price_ticks` とは**別テーブル**として
@@ -1743,7 +1858,7 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
 - 過去レート: 通貨ペアをテーブルの行として扱う（コードにハードコードしない、CLAUDE.md §5.3）。
   金額は `NUMERIC(20,8)`（CLAUDE.md §5.2）。取り込みは `ON CONFLICT` で冪等（#102）。
   **取り込み済みのレートは上書きしない。** 値を直す必要があれば新しいデータセットとして取り込み、
-  ゲームはどのデータセットを使ったかを持つ。こうすると、再取り込みの後も過去のゲームのスコアを
+  ゲームはどの日足の行を使ったかを持つ。こうすると、再取り込みの後も過去のゲームのスコアを
   同じレートで計算し直せる（#102・#103）。
   #102 で追加したテーブル（DDL は §8 に反映済み）:
   - `currency_pairs`: 通貨ペア。`symbol`（表示名兼キー。例 `USD/JPY`）と基軸・決済通貨の
@@ -1755,9 +1870,12 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
   - `daily_rates`: 1 行 = 1 通貨ペアの 1 日（平日のみ）。データセット・通貨ペア・日付・
     始値・高値・安値・終値。一意キーは（データセット, 日付）。ask 側（ao/ah/al/ac）と
     出来高（v）は保存しない。
-- ゲーム: 開始時刻・区間・データセット・速さの変更履歴・プレイヤー（`users` 参照 or ゲスト名）・
-  資金・スコア等（#103）。
+- ゲーム: 開始時刻・区間・使った日足の行（`replay_game_rates`）・速さの変更履歴・プレイヤー
+  （`users` 参照 or ゲスト名）・資金・スコア等（#103）。
 - 建玉: ゲームと**通貨ペア**を参照し、売買の向き・証拠金・レバレッジ・取得値・取得日・強制決済ラインを持つ。
   決済の値段と損益は、建玉の通貨ペアのレートで計算する。1 ゲームで複数ペア・複数件を持てる（#103）。
 - 上限解放: ゲームと通貨ペアごとに、何段解放したかを持つ（#103）。
+- #103 で追加したゲーム進行のテーブル（`replay_games` / `replay_game_days` /
+  `replay_game_rates` / `replay_speed_changes` / `replay_positions` /
+  `replay_leverage_unlocks`）の DDL は §8 に反映済み。
 - ロジックは `internal/game` に置く（ハンドラにルールを書かない）。
