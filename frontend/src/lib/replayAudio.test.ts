@@ -1,14 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  isReplayBgmPlaying,
   isReplayMuted,
   playReplayCoin,
+  playReplayOrder,
+  playReplaySettle,
+  playReplayStart,
   setReplayMuted,
+  startReplayBgm,
+  stopReplayBgm,
   unlockReplayAudio,
 } from './replayAudio';
 
-// 過去チャートモードの SE（#129 REPLAY-12）の単体テスト。
-// jsdom には AudioContext が無いため、音を鳴らす関数は「落ちないこと」だけを確認する。
+// 過去チャートモードの SE・BGM（#129 REPLAY-12・#140 REPLAY-14）の単体テスト。
+// jsdom には AudioContext が無いため、BGM の開始・停止を確かめるテストでは
+// 生成した音の数を数えられる最小限の偽 AudioContext を使う。
 
 describe('replayAudio のミュート設定', () => {
   beforeEach(() => {
@@ -42,5 +49,175 @@ describe('replayAudio のミュート設定', () => {
   it('AudioContext が無い環境でも音を鳴らそうとして落ちない', () => {
     expect(() => unlockReplayAudio()).not.toThrow();
     expect(() => playReplayCoin()).not.toThrow();
+    expect(() => playReplayStart()).not.toThrow();
+    expect(() => playReplayOrder()).not.toThrow();
+    expect(() => playReplaySettle()).not.toThrow();
+    expect(() => startReplayBgm()).not.toThrow();
+    expect(() => stopReplayBgm()).not.toThrow();
+  });
+});
+
+// 生成したオシレーターの数（鳴らした音の数）を数える。AudioContext はモジュール内で
+// 使い回されるため、テストをまたいでも数えられるようファイル全体で共有する。
+let oscillatorCount = 0;
+// モジュール内で使い回されている偽 AudioContext。state をテストから変えるために持つ。
+let activeContext: FakeAudioContext | null = null;
+
+class FakeGainParam {
+  value = 1;
+  setValueAtTime = vi.fn();
+  exponentialRampToValueAtTime = vi.fn();
+  cancelScheduledValues = vi.fn();
+}
+
+class FakeGainNode {
+  gain = new FakeGainParam();
+  connect = vi.fn();
+  disconnect = vi.fn();
+}
+
+class FakeOscillatorNode {
+  type: OscillatorType = 'sine';
+  frequency = { setValueAtTime: vi.fn() };
+  connect = vi.fn();
+  start = vi.fn();
+  stop = vi.fn();
+
+  constructor() {
+    oscillatorCount += 1;
+  }
+}
+
+class FakeAudioContext {
+  state: AudioContextState = 'running';
+  currentTime = 0;
+  destination = {} as AudioDestinationNode;
+  resume = vi.fn(async () => undefined);
+
+  constructor() {
+    activeContext = this;
+  }
+
+  createGain(): FakeGainNode {
+    return new FakeGainNode();
+  }
+
+  createOscillator(): FakeOscillatorNode {
+    return new FakeOscillatorNode();
+  }
+}
+
+function installFakeAudioContext() {
+  Object.defineProperty(window, 'AudioContext', {
+    configurable: true,
+    writable: true,
+    value: FakeAudioContext,
+  });
+}
+
+function runningContext(): FakeAudioContext {
+  if (activeContext == null) throw new Error('AudioContext が作成されていません');
+  return activeContext;
+}
+
+describe('replayAudio の SE と BGM', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.localStorage.clear();
+    stopReplayBgm();
+    setReplayMuted(false);
+    oscillatorCount = 0;
+    installFakeAudioContext();
+    unlockReplayAudio();
+    // 前のテストの state を引き継がない（context はモジュール内で使い回される）。
+    runningContext().state = 'running';
+  });
+
+  afterEach(() => {
+    stopReplayBgm();
+    setReplayMuted(false);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('ミュート中は SE も BGM も鳴らない', () => {
+    setReplayMuted(true);
+
+    playReplayStart();
+    startReplayBgm();
+
+    expect(isReplayBgmPlaying()).toBe(false);
+    expect(oscillatorCount).toBe(0);
+  });
+
+  it('BGM を開始し、止められる', () => {
+    startReplayBgm();
+    expect(isReplayBgmPlaying()).toBe(true);
+    expect(oscillatorCount).toBeGreaterThan(0);
+
+    stopReplayBgm();
+    expect(isReplayBgmPlaying()).toBe(false);
+  });
+
+  it('AudioContext が suspended の間は BGM の音を予約しない', () => {
+    runningContext().state = 'suspended';
+
+    startReplayBgm();
+
+    expect(oscillatorCount).toBe(0);
+    vi.advanceTimersByTime(4000);
+    expect(oscillatorCount).toBe(0);
+  });
+
+  it('AudioContext が running なら BGM の音を予約する', () => {
+    runningContext().state = 'running';
+
+    startReplayBgm();
+
+    expect(oscillatorCount).toBeGreaterThan(0);
+  });
+
+  it('BGM を二重に開始しない', () => {
+    startReplayBgm();
+    const created = oscillatorCount;
+
+    startReplayBgm();
+
+    expect(oscillatorCount).toBe(created);
+    expect(isReplayBgmPlaying()).toBe(true);
+  });
+
+  it('BGM はフレーズを繰り返し、止めた後は鳴らさない', () => {
+    startReplayBgm();
+    const phrase = oscillatorCount;
+
+    vi.advanceTimersByTime(4000);
+    expect(oscillatorCount).toBe(phrase * 2);
+
+    stopReplayBgm();
+    const stopped = oscillatorCount;
+    vi.advanceTimersByTime(8000);
+    expect(oscillatorCount).toBe(stopped);
+  });
+
+  it('ミュートで BGM を止め、解除するとプレイ中なら再開する', () => {
+    startReplayBgm();
+    expect(isReplayBgmPlaying()).toBe(true);
+
+    setReplayMuted(true);
+    expect(isReplayBgmPlaying()).toBe(false);
+
+    setReplayMuted(false);
+    expect(isReplayBgmPlaying()).toBe(true);
+  });
+
+  it('止めた後にミュートを解除しても BGM は再開しない', () => {
+    startReplayBgm();
+    stopReplayBgm();
+
+    setReplayMuted(true);
+    setReplayMuted(false);
+
+    expect(isReplayBgmPlaying()).toBe(false);
   });
 });

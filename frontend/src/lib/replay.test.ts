@@ -228,13 +228,25 @@ describe('formatReplayDate / formatReplayInterval', () => {
 });
 
 describe('replayErrorMessage', () => {
-  it('サーバーのメッセージをそのまま使う', () => {
+  it('反対方向の建玉のエラーを日本語にする（#140 REPLAY-14）', () => {
     expect(
       replayErrorMessage(
         { status: 409, data: { message: 'close existing positions of this pair first' } },
         '失敗しました',
       ),
-    ).toBe('close existing positions of this pair first');
+    ).toBe('このペアには反対の向きの建玉があります。先に決済してください');
+  });
+
+  it('知らないメッセージはサーバーの文言をそのまま使う', () => {
+    expect(
+      replayErrorMessage({ status: 409, data: { message: 'some other error' } }, '失敗しました'),
+    ).toBe('some other error');
+  });
+
+  it('翻訳表の継承プロパティは翻訳結果として返さない', () => {
+    for (const message of ['toString', 'constructor', '__proto__']) {
+      expect(replayErrorMessage({ status: 409, data: { message } }, '失敗しました')).toBe(message);
+    }
   });
 
   it('メッセージが無ければ fallback を返す', () => {

@@ -43,7 +43,17 @@ import {
   stepReplayMargin,
   type ReplaySession,
 } from '../lib/replay';
-import { isReplayMuted, playReplayCoin, setReplayMuted, unlockReplayAudio } from '../lib/replayAudio';
+import {
+  isReplayMuted,
+  playReplayCoin,
+  playReplayOrder,
+  playReplaySettle,
+  playReplayStart,
+  setReplayMuted,
+  startReplayBgm,
+  stopReplayBgm,
+  unlockReplayAudio,
+} from '../lib/replayAudio';
 import styles from './ReplayPage.module.css';
 
 // ReplayPage は過去チャートモード（design.md §13）の入口。ゲームトークンは React の
@@ -58,6 +68,8 @@ export default function ReplayPage() {
   const [phase, setPhase] = useState<'intro' | 'playing'>('intro');
   // カウントダウンを始めた時刻（Date.now）。null ならカウントダウン中ではない。
   const [countdownStartedAt, setCountdownStartedAt] = useState<number | null>(null);
+  // カウントダウンが終わってゲームが始まったか（BGM の開始に使う。#140 REPLAY-14）。
+  const [countdownDone, setCountdownDone] = useState(false);
   // begin が成功したか。通信が終わるまではカウントダウン画面を消さない。
   const [beginSucceeded, setBeginSucceeded] = useState(false);
   // 裏の ReplayGame が状態を取得できたか。
@@ -82,6 +94,7 @@ export default function ReplayPage() {
   function failBegin(message: string) {
     setPhase('intro');
     setCountdownStartedAt(null);
+    setCountdownDone(false);
     setBeginSucceeded(false);
     setGameReady(false);
     setBeginError(message);
@@ -92,20 +105,25 @@ export default function ReplayPage() {
     setBeginError(null);
     setGameReady(false);
     setBeginSucceeded(false);
+    setCountdownDone(false);
     // 押した瞬間にカウントダウンを出す（サーバーは begin を受けた時刻 + 5 秒から動く）。
     setCountdownStartedAt(Date.now());
     setPhase('playing');
     // 自動再生制限があるため、AudioContext はこのクリックの中で開始する（#129 REPLAY-12）。
     unlockReplayAudio();
+    // スタートの SE（#140 REPLAY-14）。
+    playReplayStart();
     beginMutation.mutate({ gameId: session.gameId });
   }
 
   const handleLoaded = useCallback(() => setGameReady(true), []);
+  const handleCountdownFinished = useCallback(() => setCountdownDone(true), []);
 
   const playAgain = useCallback(() => {
     setSession(null);
     setPhase('intro');
     setCountdownStartedAt(null);
+    setCountdownDone(false);
     setBeginSucceeded(false);
     setGameReady(false);
     setBeginError(null);
@@ -119,6 +137,7 @@ export default function ReplayPage() {
           setGameReady(false);
           setBeginSucceeded(false);
           setCountdownStartedAt(null);
+          setCountdownDone(false);
           setPhase('intro');
           setSession(startedSession);
         }}
@@ -144,11 +163,13 @@ export default function ReplayPage() {
         session={session}
         onPlayAgain={playAgain}
         onLoaded={handleLoaded}
+        countdownDone={countdownDone}
       />
       {countdownStartedAt != null && (
         <ReplayCountdown
           startedAt={countdownStartedAt}
           ready={gameReady && beginSucceeded}
+          onFinished={handleCountdownFinished}
         />
       )}
     </>
@@ -160,9 +181,11 @@ interface ReplayGameProps {
   onPlayAgain: () => void;
   // ゲーム状態の取得が終わった（成功・失敗のどちらでも）ときに呼ぶ。
   onLoaded: () => void;
+  // カウントダウンが終わってゲームが始まったか（BGM の開始に使う）。
+  countdownDone: boolean;
 }
 
-function ReplayGame({ session, onPlayAgain, onLoaded }: ReplayGameProps) {
+function ReplayGame({ session, onPlayAgain, onLoaded, countdownDone }: ReplayGameProps) {
   const { gameId, token } = session;
   const queryClient = useQueryClient();
   const authFetch = useMemo<RequestInit>(
@@ -187,6 +210,9 @@ function ReplayGame({ session, onPlayAgain, onLoaded }: ReplayGameProps) {
   const [liquidationFlashKey, setLiquidationFlashKey] = useState(0);
   // 決済済みの建玉のうち、すでに演出を見たもの。新しく決済されたものだけに演出を出す。
   const seenClosedRef = useRef<Set<number> | null>(null);
+  // 手動の決済で SE を鳴らした建玉。状態の取り直しで同じ決済の SE を二重に鳴らさない
+  // （#140 REPLAY-14。利益の決済は playReplayCoin、それ以外は playReplaySettle）。
+  const soundHandledRef = useRef<Set<number>>(new Set());
   // SE のミュート設定（localStorage に保存する）。
   const [muted, setMuted] = useState(isReplayMuted);
 
@@ -206,6 +232,15 @@ function ReplayGame({ session, onPlayAgain, onLoaded }: ReplayGameProps) {
 
   const state = stateQuery.data?.status === 200 ? stateQuery.data.data : undefined;
   const finished = state != null && isReplayFinishedStatus(state.status);
+
+  // カウントダウンが終わってゲームが始まったら BGM をループ再生する（#140 REPLAY-14）。
+  // 結果画面に進んだとき・「もう一度」で離れたとき・画面を離れたとき（アンマウント）に止める。
+  const gamePlaying = countdownDone && state != null && !finished;
+  useEffect(() => {
+    if (!gamePlaying) return;
+    startReplayBgm();
+    return () => stopReplayBgm();
+  }, [gamePlaying]);
 
   // カウントダウン画面を消してよいかは親が決める。取得が終わったら知らせる。
   useEffect(() => {
@@ -234,7 +269,12 @@ function ReplayGame({ session, onPlayAgain, onLoaded }: ReplayGameProps) {
       if (seen.has(position.id)) continue;
       seen.add(position.id);
       if (position.status === 'liquidated') liquidated = true;
-      if (isPositiveAmount(position.pnl)) profited = true;
+      // 手動の決済は成功時に鳴らし済み。ここで鳴らすと二重になる（#140 REPLAY-14）。
+      // ここで鳴らす場合も建玉 ID を記録し、応答順序が逆でも onSuccess 側で二重に鳴らさない。
+      if (isPositiveAmount(position.pnl) && !soundHandledRef.current.has(position.id)) {
+        soundHandledRef.current.add(position.id);
+        profited = true;
+      }
     }
 
     if (liquidated) {
@@ -290,14 +330,34 @@ function ReplayGame({ session, onPlayAgain, onLoaded }: ReplayGameProps) {
   const orderMutation = usePlaceReplayOrder({
     fetch: authFetch,
     mutation: {
-      onSuccess: (res) => onActionResult(res, '注文できませんでした'),
+      onSuccess: (res) => {
+        // 注文が成功したときだけ購入の SE を鳴らす（失敗では鳴らさない。#140 REPLAY-14）。
+        if (res.status === 200) playReplayOrder();
+        onActionResult(res, '注文できませんでした');
+      },
       onError: onActionError,
     },
   });
   const closeMutation = useCloseReplayPosition({
     fetch: authFetch,
     mutation: {
-      onSuccess: (res) => onActionResult(res, '決済できませんでした'),
+      onSuccess: (res) => {
+        if (res.status === 200) {
+          // 手動の決済が成功したときの SE。利益が出た決済は既存の利益の SE を鳴らし、
+          // 決済の SE とは二重に鳴らさない（#140 REPLAY-14）。状態の取り直しが先に届いて
+          // effect 側で鳴らし済みなら、ここでは何も鳴らさない（応答順序で二重にならない）。
+          const positionId = res.data.position.id;
+          if (!soundHandledRef.current.has(positionId)) {
+            soundHandledRef.current.add(positionId);
+            if (isPositiveAmount(res.data.pnl)) {
+              playReplayCoin();
+            } else {
+              playReplaySettle();
+            }
+          }
+        }
+        onActionResult(res, '決済できませんでした');
+      },
       onError: onActionError,
     },
   });
@@ -524,7 +584,7 @@ function ReplayGame({ session, onPlayAgain, onLoaded }: ReplayGameProps) {
             className={styles.toggle}
             onClick={toggleMute}
             aria-pressed={muted}
-            title="利益が出た決済の効果音を鳴らすかどうか"
+            title="効果音とBGMを鳴らすかどうか"
           >
             {muted ? '音を出す' : '音を消す'}
           </button>
