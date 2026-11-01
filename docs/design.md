@@ -1137,6 +1137,7 @@ DB に `season_id` を最初から入れておけば後付けできる。
 CREATE TABLE users (
     discord_id      TEXT        PRIMARY KEY,
     display_name    TEXT        NOT NULL,
+    avatar          TEXT,                       -- Discord の avatar hash。NULL = 未設定（#104）
     balance         NUMERIC(20,8) NOT NULL,
     season_id       BIGINT      NOT NULL,
     roast_enabled   BOOLEAN     NOT NULL DEFAULT TRUE,
@@ -1878,4 +1879,11 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
 - #103 で追加したゲーム進行のテーブル（`replay_games` / `replay_game_days` /
   `replay_game_rates` / `replay_speed_changes` / `replay_positions` /
   `replay_leverage_unlocks`）の DDL は §8 に反映済み。
+- #104 で `users.avatar`（Discord の avatar hash。NULL = 未設定）を追加した。Web ログインの
+  コールバックで表示名と一緒に保存・更新し、ランキングのアイコン URL は `internal/game` の
+  純粋関数で組み立てる（未設定なら ID から決まる Discord のデフォルトアイコン）。
+  ランキングは `replay_games` の確定済みスコア（`final_funds`）を全期間から選び、
+  ログインユーザーは 1 人 1 行（最高記録）、ゲストは 1 プレイ 1 行で上位 20 件を返す。
+  同点は `finished_at` が最も早い記録を上にし、通常終了の `finished_at` は
+  リクエスト時刻ではなく「60 日目が公開された論理的な時刻」を保存する（#104）。
 - ロジックは `internal/game` に置く（ハンドラにルールを書かない）。

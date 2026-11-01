@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,9 @@ const (
 	// replayMinSpeed / replayMaxSpeed は速さの選択肢（×1・×2・×3。追加決定）。
 	replayMinSpeed = 1
 	replayMaxSpeed = 3
+
+	// replayDefaultAvatarCount は Discord のデフォルトアイコンの種類数（#104）。
+	replayDefaultAvatarCount = 6
 )
 
 // ゲーム・建玉の状態。replay_games.status / replay_positions.status の値と一致させる。
@@ -148,6 +152,60 @@ func replayCurrentSpeed(changes []db.ReplaySpeedChange) int {
 		speed = int(ch.Speed)
 	}
 	return speed
+}
+
+// replayFinishTime は通常終了（60 日目の公開）の論理的な時刻を返す（#104 REPLAY-4）。
+// replayPublishedDays の逆関数。開始時刻と速さの変更履歴から、公開済み日数が
+// replayIntervalDays に達する最初の時刻を求める。同点のランキングで「先に確定した記録」を
+// 決めるために使う（リクエストが来た時刻ではない）。
+func replayFinishTime(startedAt time.Time, changes []db.ReplaySpeedChange) time.Time {
+	remaining := replayStandardDayDuration * replayIntervalDays
+	speed := 1
+	from := startedAt
+	for _, ch := range changes {
+		t := ch.ChangedAt.Time
+		if t.After(from) {
+			effective := t.Sub(from) * time.Duration(speed)
+			if effective >= remaining {
+				return from.Add(ceilDuration(remaining, speed))
+			}
+			remaining -= effective
+			from = t
+		}
+		if ch.Speed > 0 {
+			speed = int(ch.Speed)
+		}
+	}
+	return from.Add(ceilDuration(remaining, speed))
+}
+
+// ceilDuration は d を divisor で割った値を切り上げる（公開日数は床で数えるため、
+// 目標の日数に届く最初の時刻は切り上げになる）。
+func ceilDuration(d time.Duration, divisor int) time.Duration {
+	if divisor <= 0 {
+		divisor = 1
+	}
+	unit := time.Duration(divisor)
+	q := d / unit
+	if d%unit != 0 {
+		q++
+	}
+	return q
+}
+
+// replayAvatarURL はランキング表示用の Discord アイコン URL を返す（#104 REPLAY-4）。
+// avatar（ハッシュ）があれば cdn.discordapp.com/avatars の URL、無ければ Discord の
+// デフォルトアイコンを使う。デフォルトの番号は新ユーザー名方式の規則
+// （ユーザーID を uint64 として 22 ビット右シフトし、6 で割った余り）。ID が数値でなければ 0。
+func replayAvatarURL(discordID string, avatar *string) string {
+	if avatar != nil && *avatar != "" {
+		return fmt.Sprintf("https://cdn.discordapp.com/avatars/%s/%s.png", discordID, *avatar)
+	}
+	index := uint64(0)
+	if id, err := strconv.ParseUint(discordID, 10, 64); err == nil {
+		index = (id >> 22) % replayDefaultAvatarCount
+	}
+	return fmt.Sprintf("https://cdn.discordapp.com/embed/avatars/%d.png", index)
 }
 
 // replayNotional は建玉の大きさ = 当初証拠金 × レバレッジ（design.md §13）。
@@ -333,6 +391,20 @@ type ReplayStartResult struct {
 	PublishedDays int
 	Pairs         []ReplayPair
 	Candles       []ReplayPairCandles
+}
+
+// ReplayRankingEntry はランキングの 1 行（#104 REPLAY-4）。
+type ReplayRankingEntry struct {
+	// Rank は 1 始まりの順位（並び順の位置）。
+	Rank int
+	// Name は表示名（ログインユーザー）またはゲスト名。
+	Name string
+	// IsGuest はゲストの行か（true なら画面で「ゲスト」の印を付ける）。
+	IsGuest bool
+	// AvatarURL はログインユーザーの Discord アイコン URL。ゲストは nil。
+	AvatarURL *string
+	// FinalFunds はスコア（最終資金）。
+	FinalFunds decimal.Decimal
 }
 
 // replayCtx はゲーム処理で共通に使う派生データ（通貨ペア・日付・日足の対応）。
@@ -666,7 +738,10 @@ func (s *ReplayService) advance(ctx context.Context, q *db.Queries, game db.Repl
 		game.Funds = funds
 		game.Status = replayStatusFinished
 		game.FinalFunds = decimal.NullDecimal{Decimal: funds, Valid: true}
-		game.FinishedAt = pgtype.Timestamptz{Time: now, Valid: true}
+		// 同点の順位を安定させるため、終了時刻は「リクエストが来た時刻」ではなく
+		// 60 日目が公開された論理的な時刻にする（#104 マネージャー決定）。
+		finishedAt := replayFinishTime(game.StartedAt.Time, changes)
+		game.FinishedAt = pgtype.Timestamptz{Time: finishedAt, Valid: true}
 		if err := q.FinishReplayGame(ctx, db.FinishReplayGameParams{
 			ID:         game.ID,
 			Status:     replayStatusFinished,
@@ -811,6 +886,83 @@ func (s *ReplayService) getGameForUpdate(ctx context.Context, q *db.Queries, tok
 		return db.ReplayGame{}, ErrReplayGameNotFound
 	}
 	return game, nil
+}
+
+// finishExpiredGames は status = playing のゲームすべてについて、#103 と同じ遅延評価
+// （公開済みの日までの強制決済 → 確定 → 早期終了）を clock.Now() で行う（#104）。
+// ランキング取得の前に呼び、終了時刻を過ぎて未確定のゲームを先に確定させる。
+// 同時リクエストで二重処理しないよう、ゲームの行を 1 件ずつロックする（ID 順で取る）。
+func (s *ReplayService) finishExpiredGames(ctx context.Context, now time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := db.New(tx)
+
+	ids, err := q.ListPlayingReplayGameIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list playing replay games: %w", err)
+	}
+	for _, id := range ids {
+		game, err := q.GetReplayGameByIDForUpdate(ctx, id)
+		if err != nil {
+			return fmt.Errorf("get replay game for update: %w", err)
+		}
+		c, err := loadReplayCtx(ctx, q, game.ID)
+		if err != nil {
+			return err
+		}
+		if _, _, err := s.advance(ctx, q, game, c, now); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+// GetRanking は過去チャートモードのランキング上位 20 件を返す（#104 REPLAY-4）。
+// ログインユーザーは 1 人 1 行（最高記録）、ゲストは 1 プレイ 1 行。取得前に、
+// 終了時刻を過ぎて未確定のゲームを確定させる（design.md §13 scale-to-zero）。
+func (s *ReplayService) GetRanking(ctx context.Context) ([]ReplayRankingEntry, error) {
+	if err := s.finishExpiredGames(ctx, s.clock.Now()); err != nil {
+		return nil, err
+	}
+
+	rows, err := db.New(s.pool).ListReplayRanking(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list replay ranking: %w", err)
+	}
+
+	entries := make([]ReplayRankingEntry, 0, len(rows))
+	for i, r := range rows {
+		entry := ReplayRankingEntry{
+			Rank:       i + 1,
+			FinalFunds: r.FinalFunds.Decimal,
+		}
+		if r.UserID.Valid {
+			entry.Name = r.DisplayName
+			avatarURL := replayAvatarURL(r.UserID.String, textPtr(r.Avatar))
+			entry.AvatarURL = &avatarURL
+		} else {
+			entry.Name = r.GuestName.String
+			entry.IsGuest = true
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// textPtr は pgtype.Text を *string に変換する（NULL なら nil）。
+func textPtr(t pgtype.Text) *string {
+	if !t.Valid {
+		return nil
+	}
+	v := t.String
+	return &v
 }
 
 // GetState はゲーム状態を取得する。遅延評価（強制決済・確定・早期終了）を先に行う。

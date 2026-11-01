@@ -135,3 +135,40 @@ INSERT INTO replay_leverage_unlocks (game_id, pair_id, tier)
 VALUES ($1, $2, $3)
 ON CONFLICT (game_id, pair_id) DO UPDATE SET tier = EXCLUDED.tier
 RETURNING *;
+
+-- name: ListPlayingReplayGameIDs :many
+-- ランキング取得の前に遅延評価（強制決済・確定・早期終了）を行う対象のゲームIDを返す
+-- （design.md §13 scale-to-zero。status = playing のすべて。#104 REPLAY-4）。
+SELECT id FROM replay_games
+WHERE status = 'playing'
+ORDER BY id;
+
+-- name: ListReplayRanking :many
+-- 過去チャートモードのランキング上位 20 件（design.md §13「資金・スコア・ランキング」）。
+-- 対象はスコア確定済み（final_funds IS NOT NULL）の全ゲーム（finished / early_finished）。
+-- ログインユーザーは 1 人 1 行（final_funds 最大、同点なら finished_at が最も早い、
+-- さらに同点なら id が最小の記録だけ）。ゲストは 1 プレイ 1 行（同じ名前でもまとめない）。
+-- 並びは final_funds DESC, finished_at ASC, id ASC。#104 の同点ルール（先に確定した記録が上）。
+WITH best_users AS (
+    SELECT DISTINCT ON (rg.user_id)
+        rg.id,
+        rg.user_id,
+        rg.guest_name,
+        u.display_name,
+        u.avatar,
+        rg.final_funds,
+        rg.finished_at
+    FROM replay_games rg
+    JOIN users u ON u.discord_id = rg.user_id
+    WHERE rg.final_funds IS NOT NULL AND rg.user_id IS NOT NULL
+    ORDER BY rg.user_id, rg.final_funds DESC, rg.finished_at ASC, rg.id ASC
+)
+SELECT id, user_id, guest_name, display_name, avatar, final_funds, finished_at
+FROM best_users
+UNION ALL
+SELECT rg.id, rg.user_id, rg.guest_name, ''::text AS display_name, NULL::text AS avatar,
+       rg.final_funds, rg.finished_at
+FROM replay_games rg
+WHERE rg.final_funds IS NOT NULL AND rg.user_id IS NULL
+ORDER BY final_funds DESC, finished_at ASC, id ASC
+LIMIT 20;

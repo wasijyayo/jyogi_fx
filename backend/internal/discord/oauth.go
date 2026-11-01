@@ -57,9 +57,12 @@ func (c OAuthConfig) userURL() string {
 }
 
 // User は /users/@me から返る最小限のフィールド。
+// Avatar はアイコンのハッシュ。未設定のユーザーには Discord が null を返すため
+// ポインタにする（#104 REPLAY-4）。
 type User struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
+	ID       string  `json:"id"`
+	Username string  `json:"username"`
+	Avatar   *string `json:"avatar"`
 }
 
 // AuthCodeURL は「Discordでログイン」ボタンの遷移先 URL を組み立てる。

@@ -2,6 +2,7 @@ package game_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,12 +50,18 @@ func TestAuthService_HandleCallback(t *testing.T) {
 
 	const discordUserID = "ws6-verify-user"
 
+	avatarHash := "avatar-hash-1"
+	avatarValue := &avatarHash
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "dummy-token"})
 	})
 	mux.HandleFunc("GET /user", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(discord.User{ID: discordUserID, Username: "WS-6 動作確認ユーザー"})
+		_ = json.NewEncoder(w).Encode(discord.User{
+			ID:       discordUserID,
+			Username: "WS-6 動作確認ユーザー",
+			Avatar:   avatarValue,
+		})
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -97,6 +104,54 @@ func TestAuthService_HandleCallback(t *testing.T) {
 	}
 	if displayName != "WS-6 動作確認ユーザー" {
 		t.Errorf("display_name = %q, want %q", displayName, "WS-6 動作確認ユーザー")
+	}
+
+	// Web ログインでアイコン（avatar hash）も保存される（#104）。
+	var avatar sql.NullString
+	if err := pool.QueryRow(ctx, `SELECT avatar FROM users WHERE discord_id = $1`, discordUserID).Scan(&avatar); err != nil {
+		t.Fatalf("select avatar: %v", err)
+	}
+	if !avatar.Valid || avatar.String != "avatar-hash-1" {
+		t.Errorf("avatar = %v, want avatar-hash-1", avatar)
+	}
+
+	// 再ログインでアイコンが更新され、Discord 側で未設定（null）なら NULL に戻る。
+	avatarHash = "avatar-hash-2"
+	if _, err := authSvc.HandleCallback(ctx, "the-code"); err != nil {
+		t.Fatalf("HandleCallback(update): %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT avatar FROM users WHERE discord_id = $1`, discordUserID).Scan(&avatar); err != nil {
+		t.Fatalf("select avatar after update: %v", err)
+	}
+	if !avatar.Valid || avatar.String != "avatar-hash-2" {
+		t.Errorf("avatar after update = %v, want avatar-hash-2", avatar)
+	}
+
+	// Discord Interaction 経由（EnsureDiscordUser）では display_name・avatar に触らない。
+	if err := authSvc.EnsureDiscordUser(ctx, discordUserID, "Interaction の名前"); err != nil {
+		t.Fatalf("EnsureDiscordUser: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT display_name, avatar FROM users WHERE discord_id = $1`, discordUserID).
+		Scan(&displayName, &avatar); err != nil {
+		t.Fatalf("select user after interaction: %v", err)
+	}
+	if displayName != "WS-6 動作確認ユーザー" {
+		t.Errorf("display_name after interaction = %q, want unchanged", displayName)
+	}
+	if !avatar.Valid || avatar.String != "avatar-hash-2" {
+		t.Errorf("avatar after interaction = %v, want unchanged", avatar)
+	}
+
+	// Discord 側でアイコンを外したら（null）、再ログインで NULL に戻る。
+	avatarValue = nil
+	if _, err := authSvc.HandleCallback(ctx, "the-code"); err != nil {
+		t.Fatalf("HandleCallback(null avatar): %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT avatar FROM users WHERE discord_id = $1`, discordUserID).Scan(&avatar); err != nil {
+		t.Fatalf("select avatar after null: %v", err)
+	}
+	if avatar.Valid {
+		t.Errorf("avatar after null = %v, want NULL", avatar)
 	}
 
 	// sessions_auth に発行されたことを確認

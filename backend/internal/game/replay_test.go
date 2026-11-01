@@ -212,3 +212,109 @@ func TestIsPositiveInteger(t *testing.T) {
 		}
 	}
 }
+
+// TestReplayFinishTime は通常終了（60 日目の公開）の論理的な時刻を確認する（#104）。
+// replayPublishedDays の逆関数になっており、その時刻で 60 日、直前で 59 日になる。
+func TestReplayFinishTime(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		changes []db.ReplaySpeedChange
+		want    time.Time
+	}{
+		{
+			name: "速さ変更なしは180秒後",
+			want: start.Add(180 * time.Second),
+		},
+		{
+			name: "途中で×2（6秒×1 + 174秒を×2 = 93秒）",
+			changes: []db.ReplaySpeedChange{
+				{ChangedAt: pgtype.Timestamptz{Time: start.Add(6 * time.Second), Valid: true}, Speed: 2},
+			},
+			want: start.Add(93 * time.Second),
+		},
+		{
+			name: "×3→×1（3秒×1 + 3秒×3 + 168秒×1 = 174秒）",
+			changes: []db.ReplaySpeedChange{
+				{ChangedAt: pgtype.Timestamptz{Time: start.Add(3 * time.Second), Valid: true}, Speed: 3},
+				{ChangedAt: pgtype.Timestamptz{Time: start.Add(6 * time.Second), Valid: true}, Speed: 1},
+			},
+			want: start.Add(174 * time.Second),
+		},
+		{
+			name: "区間の途中で目標に届く（100秒×1 + 80秒を×3 = 126.666666667秒）",
+			changes: []db.ReplaySpeedChange{
+				{ChangedAt: pgtype.Timestamptz{Time: start.Add(100 * time.Second), Valid: true}, Speed: 3},
+			},
+			want: start.Add(100*time.Second + 26*time.Second + 666666667*time.Nanosecond),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := replayFinishTime(start, tt.changes)
+			if !got.Equal(tt.want) {
+				t.Errorf("replayFinishTime = %s, want %s", got, tt.want)
+			}
+			if days := replayPublishedDays(start, tt.changes, got); days != replayIntervalDays {
+				t.Errorf("published days at finish = %d, want %d", days, replayIntervalDays)
+			}
+			if days := replayPublishedDays(start, tt.changes, got.Add(-time.Nanosecond)); days >= replayIntervalDays {
+				t.Errorf("published days just before finish = %d, want < %d", days, replayIntervalDays)
+			}
+		})
+	}
+}
+
+// TestReplayAvatarURL は Discord のアイコン URL の組み立てを確認する（#104）。
+func TestReplayAvatarURL(t *testing.T) {
+	hash := "abc123"
+	tests := []struct {
+		name      string
+		discordID string
+		avatar    *string
+		want      string
+	}{
+		{
+			name:      "avatarありはCDNのURL",
+			discordID: "123456789012345678",
+			avatar:    &hash,
+			want:      "https://cdn.discordapp.com/avatars/123456789012345678/abc123.png",
+		},
+		{
+			name:      "avatarなしはIDから決まるデフォルト（index 1）",
+			discordID: "999999999999999999",
+			want:      "https://cdn.discordapp.com/embed/avatars/1.png",
+		},
+		{
+			name:      "avatarなし（2^22 は index 1）",
+			discordID: "4194304",
+			want:      "https://cdn.discordapp.com/embed/avatars/1.png",
+		},
+		{
+			name:      "avatarなし（2^23 は index 2）",
+			discordID: "8388608",
+			want:      "https://cdn.discordapp.com/embed/avatars/2.png",
+		},
+		{
+			name:      "IDが数値でなければ index 0",
+			discordID: "not-a-number",
+			want:      "https://cdn.discordapp.com/embed/avatars/0.png",
+		},
+		{
+			name:      "avatarが空文字ならデフォルト",
+			discordID: "0",
+			avatar:    strPtr(""),
+			want:      "https://cdn.discordapp.com/embed/avatars/0.png",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := replayAvatarURL(tt.discordID, tt.avatar); got != tt.want {
+				t.Errorf("replayAvatarURL = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }
