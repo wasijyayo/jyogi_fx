@@ -1,16 +1,22 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
   getGetReplayGameStateQueryKey,
+  useAddReplayMargin,
+  useChangeReplaySpeed,
+  useCloseReplayPosition,
   useGetReplayGameState,
   usePlaceReplayOrder,
+  useUnlockReplayLeverage,
 } from '../api/generated/api';
+import type { ReplayPosition } from '../api/generated/model';
 import ReplayChart from '../components/replay/ReplayChart';
 import ReplayStart from '../components/replay/ReplayStart';
 import { formatPrice, formatSide, formatSignedPrice } from '../lib/format';
 import {
   REPLAY_INTERVAL_DAYS,
+  REPLAY_SPEEDS,
   formatRemainingTime,
   isPositiveIntegerString,
   isReplayFinishedStatus,
@@ -55,12 +61,14 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [selectedPairId, setSelectedPairId] = useState<number | null>(null);
+  const [unlockConfirming, setUnlockConfirming] = useState(false);
+  const [marginInputs, setMarginInputs] = useState<Record<number, string>>({});
   const [orderMargin, setOrderMargin] = useState('100');
   const [orderLeverage, setOrderLeverage] = useState('1');
 
   const stateQuery = useGetReplayGameState(gameId, {
     query: {
-      // 3 秒 ÷ 速さ 以下を目安にポーリングする（WebSocket は使わない）。
+      // 3 秒 ÷ 速さ 以下を目安にポーリングする（WebSocket は使わない）。終了後は止める。
       refetchInterval: (query) => {
         const res = query.state.data;
         if (!res || res.status !== 200) return 1000;
@@ -72,19 +80,44 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
   });
 
   const state = stateQuery.data?.status === 200 ? stateQuery.data.data : undefined;
+  const finished = state != null && isReplayFinishedStatus(state.status);
+
+  useEffect(() => {
+    setUnlockConfirming(false);
+  }, [selectedPairId]);
+
+  function refreshState() {
+    setActionError(null);
+    void queryClient.invalidateQueries({ queryKey: getGetReplayGameStateQueryKey(gameId) });
+  }
+
+  function onActionResult(res: { status: number; data: unknown }, fallback: string) {
+    if (res.status === 200) {
+      refreshState();
+      return;
+    }
+    setActionError(replayErrorMessage(res, fallback));
+  }
 
   const orderMutation = usePlaceReplayOrder({
     fetch: authFetch,
-    mutation: {
-      onSuccess: (res) => {
-        if (res.status === 200) {
-          setActionError(null);
-          void queryClient.invalidateQueries({ queryKey: getGetReplayGameStateQueryKey(gameId) });
-          return;
-        }
-        setActionError(replayErrorMessage(res, '注文できませんでした'));
-      },
-    },
+    mutation: { onSuccess: (res) => onActionResult(res, '注文できませんでした') },
+  });
+  const closeMutation = useCloseReplayPosition({
+    fetch: authFetch,
+    mutation: { onSuccess: (res) => onActionResult(res, '決済できませんでした') },
+  });
+  const marginMutation = useAddReplayMargin({
+    fetch: authFetch,
+    mutation: { onSuccess: (res) => onActionResult(res, '証拠金を追加できませんでした') },
+  });
+  const unlockMutation = useUnlockReplayLeverage({
+    fetch: authFetch,
+    mutation: { onSuccess: (res) => onActionResult(res, '上限を解放できませんでした') },
+  });
+  const speedMutation = useChangeReplaySpeed({
+    fetch: authFetch,
+    mutation: { onSuccess: (res) => onActionResult(res, '速さを変更できませんでした') },
   });
 
   if (state == null) {
@@ -114,7 +147,7 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
     );
   }
 
-  if (isReplayFinishedStatus(state.status)) {
+  if (finished) {
     return (
       <main className={styles.main}>
         <section className={styles.result} role="status">
@@ -136,6 +169,7 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
     state.pairs.find((p) => p.pairId === selectedPairId) ?? state.pairs[0];
   const selectedCandles =
     state.candlesByPair.find((pc) => pc.pairId === selectedPair?.pairId)?.candles ?? [];
+  const selectedPositions = state.positions.filter((p) => p.pairId === selectedPair?.pairId);
   const remaining = replayRemainingSeconds(state.publishedDays, state.speed);
 
   function submitOrder(side: 'long' | 'short') {
@@ -163,6 +197,31 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
     });
   }
 
+  function addMargin(position: ReplayPosition) {
+    const amount = (marginInputs[position.id] ?? '10').trim();
+    if (!isPositiveIntegerString(amount)) {
+      setActionError('追加する証拠金は 1 以上の整数で入力してください');
+      return;
+    }
+    setActionError(null);
+    marginMutation.mutate({
+      gameId,
+      positionId: position.id,
+      data: { amount },
+    });
+  }
+
+  function unlockLeverage() {
+    if (!selectedPair) return;
+    setUnlockConfirming(false);
+    unlockMutation.mutate({ gameId, data: { pairId: selectedPair.pairId } });
+  }
+
+  function changeSpeed(speed: number) {
+    if (speed === state?.speed) return;
+    speedMutation.mutate({ gameId, data: { speed } });
+  }
+
   return (
     <main className={styles.main}>
       <section className={styles.status}>
@@ -184,11 +243,24 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
             />
           </div>
         </div>
+        <div className={styles.controls} aria-label="速さ">
+          {REPLAY_SPEEDS.map((speed) => (
+            <button
+              key={speed}
+              type="button"
+              className={speed === state.speed ? styles.toggleActive : styles.toggle}
+              onClick={() => changeSpeed(speed)}
+              disabled={speedMutation.isPending}
+            >
+              ×{speed}
+            </button>
+          ))}
+        </div>
       </section>
 
       <div className={styles.sourceRow}>
         <p className={styles.source}>出典: EV Trading Labs</p>
-        <p className={styles.sub}>一時停止はありません。</p>
+        <p className={styles.sub}>一時停止はありません。速さだけ変えられます。</p>
       </div>
 
       {actionError != null && (
@@ -225,7 +297,7 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
             {selectedPair?.symbol ?? 'チャート'}{' '}
             <span className={styles.sub}>日足（1 本 = 1 営業日）</span>
           </h2>
-          <ReplayChart candles={selectedCandles} />
+          <ReplayChart candles={selectedCandles} positions={selectedPositions} />
           <p className={styles.sub}>
             薄い部分は開始前の 20 営業日です。価格はプレイヤーの売買では動きません。
           </p>
@@ -293,6 +365,49 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
               <span className={styles.hint}>下がると得</span>
             </button>
           </div>
+
+          {selectedPair && (
+            <div className={styles.unlock}>
+              <p className={styles.unlockTitle}>レバレッジの上限解放</p>
+              <p className={styles.sub}>
+                次の段：上限 {formatPrice(selectedPair.nextUnlockLeverage)} 倍 / 費用{' '}
+                {formatPrice(selectedPair.nextUnlockCost)}
+              </p>
+              {unlockConfirming ? (
+                <div className={styles.confirmBox}>
+                  <p>
+                    上限を {formatPrice(selectedPair.nextUnlockLeverage)} 倍に上げ、費用{' '}
+                    {formatPrice(selectedPair.nextUnlockCost)} を資金から支払います。よろしいですか？
+                  </p>
+                  <div className={styles.actions}>
+                    <button
+                      type="button"
+                      className={styles.primary}
+                      onClick={unlockLeverage}
+                      disabled={unlockMutation.isPending}
+                    >
+                      支払って解放する
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondary}
+                      onClick={() => setUnlockConfirming(false)}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.secondary}
+                  onClick={() => setUnlockConfirming(true)}
+                >
+                  上限を解放する
+                </button>
+              )}
+            </div>
+          )}
         </section>
       </div>
 
@@ -335,6 +450,11 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
 
       <section className={styles.card}>
         <h2 className={styles.heading}>保有一覧（{state.positions.length} 件）</h2>
+        <p className={styles.sub}>
+          証拠金を追加すると、取引規模と価格変化に対する損益は変わらず、強制決済ラインが
+          遠ざかります。同じペア・同じ向きの建玉は複数持てます。
+        </p>
+
         {state.positions.length === 0 ? (
           <p className={styles.sub}>保有はありません。通貨ペアを選んで「買う」「売る」を押してください。</p>
         ) : (
@@ -368,6 +488,36 @@ function ReplayGame({ session, onPlayAgain }: ReplayGameProps) {
                         ? '—'
                         : formatSignedPrice(position.unrealizedPnl)}
                     </span>
+                  </span>
+                  <span className={styles.positionActions}>
+                    <input
+                      className={styles.smallInput}
+                      type="number"
+                      min={1}
+                      step={1}
+                      inputMode="numeric"
+                      aria-label={`${position.symbol} に追加する証拠金`}
+                      value={marginInputs[position.id] ?? '10'}
+                      onChange={(e) =>
+                        setMarginInputs((prev) => ({ ...prev, [position.id]: e.target.value }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      className={styles.secondary}
+                      onClick={() => addMargin(position)}
+                      disabled={marginMutation.isPending}
+                    >
+                      証拠金を追加
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.secondary}
+                      onClick={() => closeMutation.mutate({ gameId, positionId: position.id })}
+                      disabled={closeMutation.isPending}
+                    >
+                      決済
+                    </button>
                   </span>
                 </div>
               </li>

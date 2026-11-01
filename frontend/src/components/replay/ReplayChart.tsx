@@ -2,20 +2,24 @@ import { useEffect, useMemo, useRef } from 'react';
 import {
   CandlestickSeries,
   ColorType,
+  LineStyle,
   createChart,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 
-import type { ReplayCandle } from '../../api/generated/model';
+import type { ReplayCandle, ReplayPosition } from '../../api/generated/model';
 import { replayDayLabel, replayPricePrecision } from '../../lib/replay';
 import styles from '../../pages/ReplayPage.module.css';
 
 interface ReplayChartProps {
   // サーバーが公開した分の日足（開始前 20 日を含む）。
   candles: ReplayCandle[];
+  // 選択中のペアの未決済建玉。強制決済ラインを引く。
+  positions: ReplayPosition[];
 }
 
 // 日付は終了まで伏せるため、通し番号を秒に見立てて時間軸に使う（デモと同じ考え方）。
@@ -30,10 +34,12 @@ function labelOf(time: Time): string {
 }
 
 // ReplayChart は過去チャートモードの日足ローソク足チャート。
-export default function ReplayChart({ candles }: ReplayChartProps) {
+// 選択中のペアの未決済建玉ごとに、サーバーが返した強制決済ラインを線で表示する。
+export default function ReplayChart({ candles, positions }: ReplayChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
   const precision = useMemo(() => replayPricePrecision(candles), [candles]);
 
@@ -62,10 +68,12 @@ export default function ReplayChart({ candles }: ReplayChartProps) {
     const series = chart.addSeries(CandlestickSeries, {});
     chartRef.current = chart;
     seriesRef.current = series;
+    priceLinesRef.current = [];
     return () => {
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      priceLinesRef.current = [];
     };
   }, []);
 
@@ -89,8 +97,23 @@ export default function ReplayChart({ candles }: ReplayChartProps) {
       })),
     );
 
+    for (const line of priceLinesRef.current) {
+      series.removePriceLine(line);
+    }
+    priceLinesRef.current = positions.map((pos) =>
+      series.createPriceLine({
+        // 強制決済ラインも描画用の数値にする（金額計算はサーバーの decimal）。
+        price: Number(pos.liquidationLine),
+        color: '#ff9800',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `${pos.side === 'short' ? '売り' : '買い'} 強制決済`,
+      }),
+    );
+
     chart.timeScale().fitContent();
-  }, [candles, precision]);
+  }, [candles, positions, precision]);
 
   return <div ref={containerRef} className={styles.chart} />;
 }
