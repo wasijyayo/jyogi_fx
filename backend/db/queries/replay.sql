@@ -24,9 +24,18 @@ WHERE dr.pair_id = $1
 ORDER BY dr.date, rd.imported_at DESC, rd.id DESC;
 
 -- name: CreateReplayGame :one
--- ゲームを 1 件作る（#103 REPLAY-3）。開始時の status は playing、funds は初期資金。
+-- ゲームを 1 件作る（#103 REPLAY-3 / #126 REPLAY-9）。開始時の status は ready で、
+-- started_at は仮の値（begin で「現在時刻 + 3 秒」に更新する。design.md §13）。
 INSERT INTO replay_games (token_hash, user_id, guest_name, started_at, start_year, status, funds)
-VALUES ($1, $2, $3, $4, $5, 'playing', $6)
+VALUES ($1, $2, $3, $4, $5, 'ready', $6)
+RETURNING *;
+
+-- name: BeginReplayGame :one
+-- 「取引開始」で status を ready → playing にし、started_at を「現在時刻 + 3 秒」にする
+-- （#126 REPLAY-9。時間が動き始めるのはこの時刻から）。ready のときだけ更新する。
+UPDATE replay_games
+SET started_at = $2, status = 'playing'
+WHERE id = $1 AND status = 'ready'
 RETURNING *;
 
 -- name: GetReplayGameByIDForUpdate :one
@@ -48,8 +57,10 @@ UPDATE replay_games
 SET status = $2, final_funds = $3, finished_at = $4
 WHERE id = $1;
 
--- name: CreateReplayGameDay :exec
--- ゲームが使う 1 営業日分の日付を通し番号（day_index）で記録する。
+-- name: CreateReplayGameDays :copyfrom
+-- ゲームが使う 80 営業日分の日付を 1 回の COPY でまとめて記録する（#126 REPLAY-9 で
+-- 1 行ずつの INSERT をやめた）。VALUES の並びは CreateReplayGameDaysParams の
+-- フィールド順と一致させる。
 INSERT INTO replay_game_days (game_id, day_index, date)
 VALUES ($1, $2, $3);
 
@@ -59,8 +70,9 @@ SELECT * FROM replay_game_days
 WHERE game_id = $1
 ORDER BY day_index;
 
--- name: CreateReplayGameRate :exec
--- ゲームが使う日足の行（daily_rates への参照）を 1 日分記録する（#103）。
+-- name: CreateReplayGameRates :copyfrom
+-- ゲームが使う日足の行（daily_rates への参照）を全ペア・全日分 1 回の COPY でまとめて
+-- 記録する（#103・#126 REPLAY-9 で 1 行ずつの INSERT をやめた）。
 INSERT INTO replay_game_rates (game_id, pair_id, day_index, daily_rate_id)
 VALUES ($1, $2, $3, $4);
 

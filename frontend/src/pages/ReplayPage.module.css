@@ -64,6 +64,180 @@
   font-size: 13px;
 }
 
+/* 開始演出（#126 REPLAY-9）: 暗転 → 年 → 新聞 → 取引開始 → カウントダウン */
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.introDark {
+  background: #05070b;
+  color: #f5f5f0;
+}
+
+.introPaper {
+  background: #2b2b2b;
+}
+
+.introKicker {
+  margin: 0;
+  color: #9aa4b2;
+  font-size: 13px;
+  letter-spacing: 0.2em;
+}
+
+.introYear {
+  margin: 0;
+  font-size: clamp(56px, 18vw, 180px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  animation: introYearIn 900ms ease-out both;
+}
+
+.introSkip {
+  margin-top: 12px;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.newspaper {
+  width: min(720px, 100%);
+  margin: auto;
+  padding: 28px 30px 32px;
+  border-radius: 2px;
+  background: #f7f3e8;
+  color: #1c1c1c;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+  animation: introPaperOpen 500ms ease-out both;
+}
+
+.newspaperShort {
+  animation: none;
+}
+
+.newspaperMasthead {
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 3px double #1c1c1c;
+  font-size: 12px;
+  letter-spacing: 0.35em;
+  text-align: center;
+}
+
+.newspaperDate {
+  margin: 10px 0 0;
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-align: center;
+}
+
+.newspaperHeadline {
+  margin: 10px 0 14px;
+  font-size: clamp(26px, 6vw, 44px);
+  font-weight: 800;
+  text-align: center;
+}
+
+.newspaperLead {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.9;
+}
+
+.newspaperList {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.newspaperNote {
+  margin: 0 0 18px;
+  color: #444;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.countdown {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.countdownLabel {
+  margin: 0;
+  color: #9aa4b2;
+  font-size: 14px;
+  letter-spacing: 0.2em;
+}
+
+.countdownNumber {
+  margin: 0;
+  font-size: clamp(72px, 22vw, 220px);
+  font-weight: 800;
+  line-height: 1;
+  animation: introCountPulse 1s ease-out both;
+}
+
+@keyframes introYearIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes introPaperOpen {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes introCountPulse {
+  from {
+    opacity: 0.2;
+    transform: scale(1.15);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* OS の「視差効果を減らす」設定では動きを付けない（#126 REPLAY-9）。 */
+@media (prefers-reduced-motion: reduce) {
+  .introYear,
+  .newspaper,
+  .countdownNumber {
+    animation: none;
+  }
+}
+
 /* 開始画面 */
 .field {
   display: flex;
