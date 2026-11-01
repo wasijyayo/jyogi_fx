@@ -311,6 +311,51 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/replay/games/{gameId}/begin:
+    post:
+      operationId: beginReplayGame
+      summary: 過去チャートモードのゲームの時間を動かし始める
+      description: |
+        「取引開始」を押したときに呼ぶ。ゲームを ready から playing にし、開始時刻を
+        現在時刻 + 3 秒に設定する（3 秒後から 1 営業日ずつ公開される）。時刻はサーバーの
+        Clock から取る。ready のままでは注文・決済・証拠金追加・上限解放・速さ変更はできない。
+        二重に呼ばれても開始時刻は変えない（冪等）。
+      tags: [replay]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: 開始（または開始済みの現在状態）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayGameState"
+        "401":
+          description: トークンが無い・不正
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: ゲームが存在しない（またはトークンが合わない）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: ゲームが終了済み
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/replay/games/{gameId}/result:
     get:
       operationId: getReplayGameResult
@@ -1047,7 +1092,7 @@ components:
           format: int64
         status:
           type: string
-          description: playing / finished / early_finished
+          description: ready / playing / finished / early_finished
         startYear:
           type: integer
         funds:

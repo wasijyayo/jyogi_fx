@@ -87,6 +87,23 @@ func (s *apiServer) GetReplayGameState(w http.ResponseWriter, r *http.Request, g
 	writeJSON(w, http.StatusOK, replayStateToAPI(state))
 }
 
+// BeginReplayGame は POST /api/replay/games/{gameId}/begin。「取引開始」でゲームを
+// ready から playing にし、開始時刻を現在時刻 + 3 秒にする（#126 REPLAY-9）。
+func (s *apiServer) BeginReplayGame(w http.ResponseWriter, r *http.Request, gameId int64) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeAPIError(w, http.StatusUnauthorized, "missing or invalid token")
+		return
+	}
+
+	state, err := s.replay.BeginGame(r.Context(), token, gameId)
+	if err != nil {
+		writeReplayError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, replayStateToAPI(state))
+}
+
 // GetReplayGameResult は GET /api/replay/games/{gameId}/result。終了後のみ結果を返す（#127）。
 func (s *apiServer) GetReplayGameResult(w http.ResponseWriter, r *http.Request, gameId int64) {
 	token, ok := bearerToken(r)
@@ -261,6 +278,7 @@ func writeReplayError(w http.ResponseWriter, err error) {
 		errors.Is(err, game.ErrReplayPositionNotFound):
 		writeAPIError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, game.ErrReplayGameFinished),
+		errors.Is(err, game.ErrReplayGameNotStarted),
 		errors.Is(err, game.ErrReplayPositionClosed),
 		errors.Is(err, game.ErrReplayOppositePosition),
 		errors.Is(err, game.ErrLeverageExceedsMax),

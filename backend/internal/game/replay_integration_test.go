@@ -193,6 +193,17 @@ func newReplayServiceForTest(pool *pgxpool.Pool, clock Clock) *ReplayService {
 	return svc
 }
 
+// beginReplayGameForTest は StartGame のあとに「取引開始」を押した状態にする（#126 REPLAY-9）。
+// begin は started_at を「そのときの時刻 + 3 秒」にするので、時計もその時刻まで進めておく。
+// これにより、以降のテストは「時間が動き始めた時点」を基準に clock.now を進められる。
+func beginReplayGameForTest(t *testing.T, ctx context.Context, svc *ReplayService, clock *replayTestClock, res ReplayStartResult) {
+	t.Helper()
+	if _, err := svc.BeginGame(ctx, res.Token, res.GameID); err != nil {
+		t.Fatalf("BeginGame: %v", err)
+	}
+	clock.now = clock.now.Add(replayBeginCountdown)
+}
+
 // constantBar は全ペア・全日同じ OHLC を返す。
 func constantBar(o, h, l, c string) ohlcBar {
 	return func(string, int) (string, string, string, string) { return o, h, l, c }
@@ -215,6 +226,7 @@ func TestReplay_FullGameToCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	token, gameID := res.Token, res.GameID
 
 	if res.StartYear != 2015 {
@@ -349,6 +361,7 @@ func TestReplay_ForcedLiquidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 
 	ord, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
@@ -411,6 +424,7 @@ func TestReplay_AddMargin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 
 	ord, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
@@ -475,6 +489,7 @@ func TestReplay_StateNextUnlockAndUnrealizedPnl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	for _, p := range res.Pairs {
 		if !p.NextUnlockLeverage.Equal(p.MaxLeverage.Add(dec("10"))) {
 			t.Errorf("%s next unlock leverage = %s, want %s", p.Symbol, p.NextUnlockLeverage, p.MaxLeverage.Add(dec("10")))
@@ -556,6 +571,7 @@ func TestReplay_LeverageUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 	eur := pairBySymbol(t, pairs, "EUR/USD")
 
@@ -611,6 +627,7 @@ func TestReplay_SpeedChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 
 	// 即 ×2 にして 6 秒経過 → 6s×2/3s = 4 日。
 	if _, err := svc.ChangeSpeed(ctx, res.Token, res.GameID, 2); err != nil {
@@ -663,6 +680,7 @@ func TestReplay_EarlyTermination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 	eur := pairBySymbol(t, pairs, "EUR/USD")
 
@@ -740,6 +758,7 @@ func TestReplay_OrderRestrictions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 	eur := pairBySymbol(t, pairs, "EUR/USD")
 
@@ -767,6 +786,190 @@ func TestReplay_OrderRestrictions(t *testing.T) {
 		PairID: eur.ID, Side: SideShort, Margin: dec("10"), Leverage: dec("1"),
 	}); err != nil {
 		t.Errorf("short on other pair = %v, want nil", err)
+	}
+}
+
+// TestReplay_BeginGame は ready → begin → playing の流れを固定クロックで確認する
+// （#126 REPLAY-9 の完了条件）。begin 前は日足が公開されず、begin の 3 秒後から
+// 1 日目が公開される。
+func TestReplay_BeginGame(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	dates := replayTestDates(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
+	pairs := insertReplayData(t, ctx, pool, dates, constantBar("100", "105", "95", "100"))
+
+	start := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	clock := &replayTestClock{now: start}
+	svc := newReplayServiceForTest(pool, clock)
+
+	res, err := svc.StartGame(ctx, "", "tester")
+	if err != nil {
+		t.Fatalf("StartGame: %v", err)
+	}
+	usd := pairBySymbol(t, pairs, "USD/JPY")
+
+	// 作成直後は ready。started_at は仮の値で、時間は動いていない。
+	var status string
+	var startedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT status, started_at FROM replay_games WHERE id = $1`, res.GameID).
+		Scan(&status, &startedAt); err != nil {
+		t.Fatalf("query game: %v", err)
+	}
+	if status != replayStatusReady {
+		t.Errorf("status = %s, want ready", status)
+	}
+
+	// ready の間は注文・上限解放・速さ変更を受け付けない。
+	if _, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
+		PairID: usd.ID, Side: SideLong, Margin: dec("10"), Leverage: dec("1"),
+	}); !errors.Is(err, ErrReplayGameNotStarted) {
+		t.Errorf("order while ready = %v, want ErrReplayGameNotStarted", err)
+	}
+	if _, err := svc.UnlockLeverage(ctx, res.Token, res.GameID, usd.ID); !errors.Is(err, ErrReplayGameNotStarted) {
+		t.Errorf("unlock while ready = %v, want ErrReplayGameNotStarted", err)
+	}
+	if _, err := svc.ChangeSpeed(ctx, res.Token, res.GameID, 2); !errors.Is(err, ErrReplayGameNotStarted) {
+		t.Errorf("change speed while ready = %v, want ErrReplayGameNotStarted", err)
+	}
+
+	// ready の状態取得は開始前 20 日だけを返し、区間の日付は明かさない。
+	state, err := svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState(ready): %v", err)
+	}
+	if state.Status != replayStatusReady || state.PublishedDays != 0 {
+		t.Errorf("ready state = status %s / published %d, want ready / 0", state.Status, state.PublishedDays)
+	}
+	if state.IntervalStart != nil || state.IntervalEnd != nil {
+		t.Errorf("ready state leaks interval dates: %+v", state)
+	}
+	for _, pc := range state.Candles {
+		if len(pc.Candles) != replayPreDays {
+			t.Errorf("ready candles = %d, want %d", len(pc.Candles), replayPreDays)
+		}
+	}
+
+	// begin で started_at = 現在時刻 + 3 秒、status = playing になる。
+	state, err = svc.BeginGame(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("BeginGame: %v", err)
+	}
+	if state.Status != replayStatusPlaying || state.PublishedDays != 0 {
+		t.Errorf("begun state = status %s / published %d, want playing / 0", state.Status, state.PublishedDays)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status, started_at FROM replay_games WHERE id = $1`, res.GameID).
+		Scan(&status, &startedAt); err != nil {
+		t.Fatalf("query begun game: %v", err)
+	}
+	if status != replayStatusPlaying {
+		t.Errorf("status after begin = %s, want playing", status)
+	}
+	wantStart := start.Add(replayBeginCountdown)
+	if !startedAt.Equal(wantStart) {
+		t.Errorf("started_at = %s, want %s", startedAt, wantStart)
+	}
+
+	// 二重に begin しても開始時刻は変わらない（冪等）。
+	clock.now = start.Add(time.Second)
+	if _, err := svc.BeginGame(ctx, res.Token, res.GameID); err != nil {
+		t.Fatalf("BeginGame (second): %v", err)
+	}
+	var startedAtAgain time.Time
+	if err := pool.QueryRow(ctx, `SELECT started_at FROM replay_games WHERE id = $1`, res.GameID).
+		Scan(&startedAtAgain); err != nil {
+		t.Fatalf("query started_at: %v", err)
+	}
+	if !startedAtAgain.Equal(wantStart) {
+		t.Errorf("started_at after second begin = %s, want %s", startedAtAgain, wantStart)
+	}
+
+	// 開始時刻の直前までは 0 日、3 秒経過で 1 日目が公開される。
+	clock.now = wantStart.Add(3*time.Second - time.Nanosecond)
+	state, err = svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState(before first day): %v", err)
+	}
+	if state.PublishedDays != 0 {
+		t.Errorf("publishedDays just before start = %d, want 0", state.PublishedDays)
+	}
+	clock.now = wantStart.Add(replayStandardDayDuration)
+	state, err = svc.GetState(ctx, res.Token, res.GameID)
+	if err != nil {
+		t.Fatalf("GetState(first day): %v", err)
+	}
+	if state.PublishedDays != 1 {
+		t.Errorf("publishedDays after 3s = %d, want 1", state.PublishedDays)
+	}
+	for _, pc := range state.Candles {
+		if len(pc.Candles) != replayPreDays+1 {
+			t.Errorf("candles after first day = %d, want %d", len(pc.Candles), replayPreDays+1)
+		}
+	}
+
+	// 終了後の begin は受け付けない。
+	clock.now = wantStart.Add(time.Duration(replayIntervalDays) * replayStandardDayDuration)
+	if _, err := svc.GetState(ctx, res.Token, res.GameID); err != nil {
+		t.Fatalf("GetState(finished): %v", err)
+	}
+	if _, err := svc.BeginGame(ctx, res.Token, res.GameID); !errors.Is(err, ErrReplayGameFinished) {
+		t.Errorf("begin after finish = %v, want ErrReplayGameFinished", err)
+	}
+}
+
+// TestReplay_ReadyGameExcludedFromRanking は ready のまま放置されたゲームが、ランキング取得時の
+// 確定処理の対象にならないことを確認する（#126 REPLAY-9）。
+func TestReplay_ReadyGameExcludedFromRanking(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := connectTestDB(t, ctx)
+
+	gameIDs := make([]int64, 0, 1)
+	t.Cleanup(func() { cleanupReplayRankingRows(t, pool, gameIDs, nil) })
+
+	// 十分に過去に作られた ready のゲーム（普通なら終了時刻を過ぎている）。
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	clock := &replayTestClock{now: now}
+	svc := newReplayServiceForTest(pool, clock)
+
+	var id int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO replay_games (
+			token_hash, user_id, guest_name, started_at, start_year, status, funds
+		) VALUES ('rank-ready', NULL, 'ready-guest', $1, 2015, 'ready', '123456789') RETURNING id`,
+		now.Add(-24*time.Hour)).Scan(&id); err != nil {
+		t.Fatalf("insert ready game: %v", err)
+	}
+	gameIDs = append(gameIDs, id)
+
+	if _, err := svc.GetRanking(ctx); err != nil {
+		t.Fatalf("GetRanking: %v", err)
+	}
+
+	// 確定処理の対象（playing）ではないので、status は ready のまま・スコアも未確定。
+	var status string
+	var finalFunds pgtype.Text
+	if err := pool.QueryRow(ctx, `SELECT status, final_funds::text FROM replay_games WHERE id = $1`, id).
+		Scan(&status, &finalFunds); err != nil {
+		t.Fatalf("query ready game: %v", err)
+	}
+	if status != replayStatusReady {
+		t.Errorf("ready game status = %s, want ready (must not be advanced)", status)
+	}
+	if finalFunds.Valid {
+		t.Errorf("ready game final_funds = %s, want NULL", finalFunds.String)
+	}
+
+	// ランキングにも載らない（final_funds が NULL のため）。
+	entries, err := svc.GetRanking(ctx)
+	if err != nil {
+		t.Fatalf("GetRanking (second): %v", err)
+	}
+	for _, e := range entries {
+		if e.Name == "ready-guest" {
+			t.Errorf("ready game must not appear in ranking: %+v", e)
+		}
 	}
 }
 
@@ -833,6 +1036,7 @@ func TestReplay_CommonDaysSkipMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	// 共通営業日は 80 日（81 − 欠損 1）。区間 = 共通 80 日のうち後半 60 日。
 	// 開始前 20 日の日足が返る（欠損日を含まない）。
 	if len(res.Candles) != 4 {
@@ -891,6 +1095,7 @@ func TestReplay_DoesNotAffectUsersBalance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 	if _, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
 		PairID: usd.ID, Side: SideLong, Margin: dec("100"), Leverage: dec("10"),
@@ -947,6 +1152,7 @@ func TestReplay_IntervalAcrossDatasets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	if res.StartYear != 2015 {
 		t.Errorf("startYear = %d, want 2015", res.StartYear)
 	}
@@ -1015,6 +1221,7 @@ func TestReplay_NewDatasetDoesNotChangeExistingGame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartGame: %v", err)
 	}
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 	// 開始直後の約定価格は 100。
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 	ord, err := svc.PlaceOrder(ctx, res.Token, res.GameID, ReplayOrderParams{
@@ -1466,10 +1673,13 @@ func TestReplay_Result(t *testing.T) {
 	usd := pairBySymbol(t, pairs, "USD/JPY")
 	eur := pairBySymbol(t, pairs, "EUR/USD")
 
-	// 終了前は結果を返さない（区間の日付も返さない）。
+	// 終了前（ready の間）は結果を返さない（区間の日付も返さない）。
 	if _, err := svc.GetResult(ctx, res.Token, res.GameID); !errors.Is(err, ErrReplayGameNotFinished) {
 		t.Fatalf("GetResult before finish = %v, want ErrReplayGameNotFinished", err)
 	}
+
+	// 「取引開始」を押した状態にしてから操作する（#126 REPLAY-9）。
+	beginReplayGameForTest(t, ctx, svc, clock, res)
 
 	// 上限解放（250）→ 買い（証拠金 100・10 倍）。資金は 649.5。
 	unlock, err := svc.UnlockLeverage(ctx, res.Token, res.GameID, usd.ID)

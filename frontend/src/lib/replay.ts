@@ -7,6 +7,10 @@ import type { ReplayCandle, ReplayGameStarted } from '../api/generated/model';
 // 1 営業日を公開する標準の速さ（×1）の間隔（秒）。design.md §13「1 ゲームの流れ」。
 export const REPLAY_STANDARD_DAY_SECONDS = 3;
 
+// 「取引開始」から時間が動き始めるまでのカウントダウン（秒）。サーバーが begin の時刻 +
+// この秒数を started_at にする（design.md §13。#126 REPLAY-9）。
+export const REPLAY_BEGIN_COUNTDOWN_SECONDS = 3;
+
 // 1 ゲームの区間の営業日数（design.md §13「対象と期間」）。
 export const REPLAY_INTERVAL_DAYS = 60;
 

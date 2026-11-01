@@ -26,6 +26,8 @@ backend/internal/db/db.go
 backend/internal/db/models.go
 backend/internal/db/querier.go
 backend/internal/db/*.sql.go
+# :copyfrom クエリがあると sqlc が追加で生成する（#126）。
+backend/internal/db/copyfrom.go
 backend/internal/apigen/api.gen.go
 frontend/src/api/generated/
 
