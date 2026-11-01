@@ -3,6 +3,7 @@ import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/re
 import Header from './components/Header';
 import CurrencyListPage from './pages/CurrencyListPage';
 import CurrencyPage from './pages/CurrencyPage';
+import ReplayPage from './pages/ReplayPage';
 import TradePage from './pages/TradePage';
 import DemoPage from './demo/DemoPage';
 
@@ -43,7 +44,14 @@ const demoRoute = createRoute({
   component: DemoPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute, demoRoute]);
+// 過去チャートモード（#105）。開始・プレイ・結果をこの 1 画面で扱う。
+const replayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/replay',
+  component: ReplayPage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, currencyRoute, tradeRoute, demoRoute, replayRoute]);
 
 export const router = createRouter({ routeTree });
 

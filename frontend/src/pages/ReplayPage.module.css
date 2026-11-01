@@ -1,0 +1,598 @@
+.main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+}
+
+.lead {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.rules {
+  margin: 0;
+  padding-left: 20px;
+  color: #444;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.card,
+.cardCompact {
+  padding: 14px 16px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+  min-width: 0;
+}
+
+.cardCompact {
+  padding: 12px 14px;
+}
+
+.heading {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.sub {
+  margin: 0;
+  color: #666;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.loading {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.error {
+  margin: 0;
+  color: #c62828;
+  font-size: 13px;
+}
+
+/* 開始画面 */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0 0;
+}
+
+.fieldLabel {
+  color: #555;
+  font-size: 13px;
+}
+
+.textInput,
+.smallInput {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.textInput {
+  max-width: 240px;
+}
+
+.smallInput {
+  width: 76px;
+}
+
+.fieldRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.primary,
+.secondary,
+.toggle,
+.toggleActive,
+.primaryLink,
+.secondaryLink {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.primary,
+.primaryLink {
+  border: 1px solid #1e6fd9;
+  background: #1e6fd9;
+  color: #fff;
+  font-weight: 600;
+}
+
+.secondary,
+.secondaryLink,
+.toggle {
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #333;
+}
+
+.toggleActive {
+  border: 1px solid #1e6fd9;
+  background: #e8f0fc;
+  color: #1e6fd9;
+  font-weight: 600;
+}
+
+.primary:disabled,
+.secondary:disabled,
+.buy:disabled,
+.sell:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 進行状況 */
+.status {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.era {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.eraLabel {
+  color: #666;
+  font-size: 12px;
+}
+
+.eraValue {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.progressText {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 6px;
+}
+
+.progressBar {
+  height: 8px;
+  border-radius: 4px;
+  background: #eceff1;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: #1e6fd9;
+  transition: width 0.3s;
+}
+
+.controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sourceRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.source {
+  margin: 0;
+  color: #555;
+  font-size: 12px;
+}
+
+/* 通貨ペア */
+.pairs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.pair,
+.pairActive {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pair {
+  border: 1px solid #e2e2e2;
+}
+
+.pairActive {
+  border: 2px solid #1e6fd9;
+  padding: 9px 11px;
+}
+
+.pairSymbol {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.pairPrice {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pairLimit {
+  color: #777;
+  font-size: 11px;
+}
+
+.badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #1e6fd9;
+  color: #fff;
+  font-size: 11px;
+}
+
+/* チャートと注文 */
+.layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+
+.chart {
+  width: 100%;
+  height: 300px;
+  margin-bottom: 8px;
+}
+
+.orderButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.buy,
+.sell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.buy {
+  background: #26a69a;
+}
+
+.sell {
+  background: #ef5350;
+}
+
+.hint {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+.unlock {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #eee;
+}
+
+.unlockTitle {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.confirmBox {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #f0c36d;
+  border-radius: 8px;
+  background: #fff8e1;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.confirmBox p {
+  margin: 0;
+}
+
+/* 資金・含み損益 */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.summary dt {
+  color: #666;
+  font-size: 12px;
+}
+
+.summary dd {
+  margin: 2px 0 0;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pnlList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.profit {
+  color: #1b8a7e;
+}
+
+.loss {
+  color: #d32f2f;
+}
+
+/* 保有一覧 */
+.positions {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.position {
+  padding: 10px 0;
+  border-top: 1px solid #f0f0f0;
+}
+
+.position:first-child {
+  border-top: none;
+}
+
+.positionMain {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.positionPair {
+  font-weight: 700;
+}
+
+.sideBuy,
+.sideSell {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.sideBuy {
+  background: #26a69a;
+}
+
+.sideSell {
+  background: #ef5350;
+}
+
+.positionDetail {
+  color: #555;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.positionFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  color: #444;
+  font-size: 13px;
+}
+
+.positionActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.positionActions .secondary {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* 結果 */
+.result {
+  padding: 20px;
+  border: 2px solid #1e6fd9;
+  border-radius: 8px;
+  background: #f3f7fd;
+  text-align: center;
+}
+
+.scoreLabel {
+  margin: 12px 0 0;
+  color: #555;
+  font-size: 13px;
+}
+
+.score {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.resultText {
+  margin: 12px 0 4px;
+  font-size: 16px;
+}
+
+.result .actions {
+  justify-content: center;
+}
+
+.result .source {
+  margin-top: 14px;
+}
+
+/* ランキング */
+.ranking {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rankingRow {
+  display: grid;
+  grid-template-columns: 36px 24px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid #f0f0f0;
+  font-size: 14px;
+}
+
+.rankingRow:first-child {
+  border-top: none;
+}
+
+.rank {
+  color: #666;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.avatar {
+  border-radius: 50%;
+  display: block;
+}
+
+.avatarGuest {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #eceff1;
+  color: #607d8b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rankingName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.guestBadge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eceff1;
+  color: #607d8b;
+  font-size: 11px;
+}
+
+.rankingScore {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .status {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .pairs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chart {
+    height: 240px;
+  }
+
+  .summary {
+    grid-template-columns: 1fr;
+  }
+
+  .positionFoot {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .score {
+    font-size: 36px;
+  }
+}

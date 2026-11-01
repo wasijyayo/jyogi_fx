@@ -262,11 +262,13 @@ func writeReplayError(w http.ResponseWriter, err error) {
 
 func replayPairToAPI(p game.ReplayPair) apigen.ReplayPair {
 	return apigen.ReplayPair{
-		PairId:       p.PairID,
-		Symbol:       p.Symbol,
-		BaseLeverage: p.BaseLeverage.String(),
-		MaxLeverage:  p.MaxLeverage.String(),
-		FeeRate:      p.FeeRate.String(),
+		PairId:             p.PairID,
+		Symbol:             p.Symbol,
+		BaseLeverage:       p.BaseLeverage.String(),
+		MaxLeverage:        p.MaxLeverage.String(),
+		FeeRate:            p.FeeRate.String(),
+		NextUnlockLeverage: p.NextUnlockLeverage.String(),
+		NextUnlockCost:     p.NextUnlockCost.String(),
 	}
 }
 
@@ -325,6 +327,10 @@ func replayPositionToAPI(p game.ReplayPositionView) apigen.ReplayPosition {
 	if p.Pnl != nil {
 		v := p.Pnl.String()
 		out.Pnl = &v
+	}
+	if p.UnrealizedPnl != nil {
+		v := p.UnrealizedPnl.String()
+		out.UnrealizedPnl = &v
 	}
 	return out
 }
