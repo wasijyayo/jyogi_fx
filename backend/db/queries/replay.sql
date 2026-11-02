@@ -172,6 +172,23 @@ SELECT * FROM replay_leverage_unlock_payments
 WHERE game_id = $1
 ORDER BY day_index, id;
 
+-- name: CreateReplayGameEvents :copyfrom
+-- ゲーム開始時に、採用済みの出来事と区間の営業日（day_index 20..79）の対応を
+-- 1 回の COPY でまとめて記録する（#116 REPLAY-6）。VALUES の並びは
+-- CreateReplayGameEventsParams のフィールド順と一致させる。
+INSERT INTO replay_game_events (game_id, event_id, day_index)
+VALUES ($1, $2, $3);
+
+-- name: ListPublishedReplayGameEvents :many
+-- 状態取得でカットインに出す、公開済みの日に当たる出来事だけを返す（#116）。
+-- day_index が公開済みの最終日（$2）以下に限ることで、未公開の日の対応を返さない
+-- （design.md §13「先読み対策」）。同じ日は id 順（取り込み順）に並べる。
+SELECT rge.id, rge.game_id, rge.event_id, rge.day_index, he.headline
+FROM replay_game_events rge
+JOIN historical_events he ON he.id = rge.event_id
+WHERE rge.game_id = $1 AND rge.day_index <= $2
+ORDER BY rge.day_index, rge.id;
+
 -- name: ListPlayingReplayGameIDs :many
 -- ランキング取得の前に遅延評価（強制決済・確定・早期終了）を行う対象のゲームIDを返す
 -- （design.md §13 scale-to-zero。status = playing のすべて。#104 REPLAY-4）。

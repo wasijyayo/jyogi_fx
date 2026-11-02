@@ -546,6 +546,9 @@ type ReplayState struct {
 	IntervalStart *time.Time
 	IntervalEnd   *time.Time
 	FinalFunds    *decimal.Decimal
+	// Events は公開済みの日に当たる出来事（カットイン用。#116 REPLAY-6）。
+	// 未公開の日の対応は含めない。日付と day_index は持たない。
+	Events []ReplayCutInEvent
 }
 
 // ReplayStartResult はゲーム開始の結果（トークンを含む）。
@@ -558,6 +561,8 @@ type ReplayStartResult struct {
 	PublishedDays int
 	Pairs         []ReplayPair
 	Candles       []ReplayPairCandles
+	// Newspaper は開始年の採用済みの出来事（見出し・説明のみ、日付なし。#116）。
+	Newspaper []ReplayNewspaperEvent
 }
 
 // ReplayAssetPoint は資産推移の 1 日分（#127 REPLAY-10）。
@@ -777,6 +782,13 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		return ReplayStartResult{}, fmt.Errorf("create replay game rates: %w", err)
 	}
 
+	// 採用済みの出来事を新聞用に読み込み、日まで確定したものを区間の営業日へ割り当てる
+	// （#116 REPLAY-6）。取引のない日の出来事は次の共通営業日にする。
+	newspaper, err := s.createReplayGameEvents(ctx, q, game.ID, int(game.StartYear), days)
+	if err != nil {
+		return ReplayStartResult{}, err
+	}
+
 	// 開始時のレスポンス（開始前 20 日の日足を含む）。
 	pairsInfo := make([]ReplayPair, 0, len(pairs))
 	for _, p := range pairs {
@@ -807,7 +819,35 @@ func (s *ReplayService) StartGame(ctx context.Context, userID, guestName string)
 		PublishedDays: 0,
 		Pairs:         pairsInfo,
 		Candles:       candles,
+		Newspaper:     newspaper,
 	}, nil
+}
+
+// createReplayGameEvents は開始年の採用済みの出来事を読み込み、新聞用の一覧と、
+// 日まで確定した出来事の区間営業日への対応（replay_game_events）を作る（#116 REPLAY-6）。
+// 出来事が 0 件でもゲームは動く（空の一覧を返す）。
+func (s *ReplayService) createReplayGameEvents(ctx context.Context, q *db.Queries, gameID int64, startYear int, days []time.Time) ([]ReplayNewspaperEvent, error) {
+	events, err := q.ListAdoptedHistoricalEventsForYear(ctx, int32(startYear))
+	if err != nil {
+		return nil, fmt.Errorf("list historical events: %w", err)
+	}
+
+	assignments := replayEventAssignments(days, events)
+	if len(assignments) > 0 {
+		params := make([]db.CreateReplayGameEventsParams, 0, len(assignments))
+		for _, a := range assignments {
+			params = append(params, db.CreateReplayGameEventsParams{
+				GameID:   gameID,
+				EventID:  a.EventID,
+				DayIndex: a.DayIndex,
+			})
+		}
+		if _, err := q.CreateReplayGameEvents(ctx, params); err != nil {
+			return nil, fmt.Errorf("create replay game events: %w", err)
+		}
+	}
+
+	return replayNewspaperEvents(events), nil
 }
 
 // BeginGame は「取引開始」を押したときに、ゲームを ready から playing にする
@@ -1330,6 +1370,20 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		currentDay = len(days) - 1
 	}
 
+	// カットインに出す出来事は公開済みの日に当たるものだけ（#116 REPLAY-6）。
+	// 未公開の日の対応は返さない（design.md §13「先読み対策」）。
+	eventRows, err := q.ListPublishedReplayGameEvents(ctx, db.ListPublishedReplayGameEventsParams{
+		GameID:   game.ID,
+		DayIndex: int32(currentDay),
+	})
+	if err != nil {
+		return ReplayState{}, fmt.Errorf("list published replay game events: %w", err)
+	}
+	events := make([]ReplayCutInEvent, 0, len(eventRows))
+	for _, e := range eventRows {
+		events = append(events, ReplayCutInEvent{ID: e.ID, Headline: e.Headline})
+	}
+
 	positions, err := q.ListOpenReplayPositions(ctx, game.ID)
 	if err != nil {
 		return ReplayState{}, fmt.Errorf("list open positions: %w", err)
@@ -1384,6 +1438,7 @@ func (s *ReplayService) buildState(ctx context.Context, q *db.Queries, game db.R
 		ClosedPositions:    closedViews,
 		Candles:            candles,
 		TotalUnrealizedPnl: totalUnrealized,
+		Events:             events,
 	}
 
 	if finished {

@@ -908,6 +908,7 @@ components:
         - publishedDays
         - pairs
         - candlesByPair
+        - newspaper
       properties:
         gameId:
           type: integer
@@ -933,6 +934,27 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReplayPairCandles"
+        newspaper:
+          type: array
+          description: |
+            開始年の採用済みの出来事の一覧（新聞）。見出しと説明だけで、日付・月日・
+            day_index は含めない（開始年だけを公開する。design.md §13「先読み対策」）。
+            0 件の年でも空配列を返す。
+          items:
+            $ref: "#/components/schemas/ReplayNewspaperEvent"
+
+    ReplayNewspaperEvent:
+      type: object
+      required:
+        - headline
+        - description
+      properties:
+        headline:
+          type: string
+          description: 見出し（日付は含めない）
+        description:
+          type: string
+          description: 説明（相場への影響・値動き・売買の推奨は書かない）
 
     ReplayPair:
       type: object
@@ -1005,6 +1027,22 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReplayCandle"
+
+    ReplayCutInEvent:
+      type: object
+      required:
+        - id
+        - headline
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: |
+            ゲーム内の出来事の識別子（replay_game_events.id）。同じ出来事を 1 回だけ
+            出すために画面が使う。日付や day_index ではない。
+        headline:
+          type: string
+          description: 出来事の名前（相場への影響・値動き・売買の推奨は含めない）
 
     ReplayPosition:
       type: object
@@ -1087,6 +1125,7 @@ components:
         - closedPositions
         - candlesByPair
         - totalUnrealizedPnl
+        - events
       properties:
         gameId:
           type: integer
@@ -1129,6 +1168,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReplayPairCandles"
+        events:
+          type: array
+          description: |
+            公開済みの日に当たる出来事（カットイン用）。公開されていない日の対応は返さない
+            （design.md §13「先読み対策」）。日付と day_index は含めない。同じ出来事を
+            1 回だけ出すための識別子 id を持つ。0 件でも空配列を返す。
+          items:
+            $ref: "#/components/schemas/ReplayCutInEvent"
         intervalStart:
           type: string
           format: date

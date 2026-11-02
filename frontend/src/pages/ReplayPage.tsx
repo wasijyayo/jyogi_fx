@@ -16,6 +16,7 @@ import {
 import type { ReplayPosition } from '../api/generated/model';
 import ReplayChart from '../components/replay/ReplayChart';
 import ReplayCountdown from '../components/replay/ReplayCountdown';
+import ReplayEventCutIn from '../components/replay/ReplayEventCutIn';
 import ReplayIntro, { markIntroSeen } from '../components/replay/ReplayIntro';
 import ReplayResult from '../components/replay/ReplayResult';
 import ReplayStart from '../components/replay/ReplayStart';
@@ -527,6 +528,7 @@ function ReplayGame({ session, onPlayAgain, onLoaded, countdownDone }: ReplayGam
 
   return (
     <main className={`${styles.main} ${styles.gameMain} ${liquidating ? styles.liquidating : ''}`}>
+      <ReplayEventCutIn events={state.events} />
       {liquidating &&
         createPortal(
           <div key={liquidationFlashKey} className={styles.flashOverlay} aria-hidden="true" />,
@@ -929,8 +931,22 @@ function ReplayGame({ session, onPlayAgain, onLoaded, countdownDone }: ReplayGam
 
         <aside className={`${styles.column} ${styles.columnRight}`}>
           <section className={`${styles.card} ${styles.eventsCard}`}>
-            <h2 className={styles.heading}>出来事</h2>
-            <p className={styles.sub}>出来事はここに表示されます</p>
+            <h2 className={styles.heading}>新聞</h2>
+            <p className={styles.sub}>
+              {state.startYear}年の出来事です。日付は表示しません。
+            </p>
+            {session.started.newspaper.length === 0 ? (
+              <p className={styles.sub}>この年の出来事の記録はありません。</p>
+            ) : (
+              <ul className={styles.playEventList}>
+                {session.started.newspaper.map((event, index) => (
+                  <li key={`${index}-${event.headline}`} className={styles.playEvent}>
+                    <p className={styles.playEventHeadline}>{event.headline}</p>
+                    <p className={styles.playEventDescription}>{event.description}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         </aside>
       </div>

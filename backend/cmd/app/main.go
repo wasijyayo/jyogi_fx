@@ -23,7 +23,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: app <serve|register-commands|import-rates>")
+		fmt.Fprintln(os.Stderr, "usage: app <serve|register-commands|import-rates|import-events>")
 		os.Exit(1)
 	}
 
@@ -38,6 +38,10 @@ func main() {
 		}
 	case "import-rates":
 		if err := runImportRates(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "import-events":
+		if err := runImportEvents(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 	default:
@@ -341,6 +345,58 @@ func runImportRates(args []string) error {
 		}
 		log.Printf("%s: 入れた件数=%d 週末で飛ばした件数=%d 既にあった件数=%d",
 			path, res.Inserted, res.SkippedWeekend, res.AlreadyExisted)
+	}
+	return nil
+}
+
+// runImportEvents は過去チャートモードの出来事（#116 REPLAY-6）を DB に取り込む
+// 手動バッチ。入力は UTF-8 の JSON（オブジェクトの配列）で、1 ファイル 1 トランザクション。
+//
+//	app import-events events-2020.json
+//
+// 既定では候補（採用未定）として入れる。採用の確認は #119 で行い、ゲームが使うのは
+// 採用済み（adopted = true）の行だけ。再実行しても行を増やさず、既存の行は上書きしない。
+func runImportEvents(args []string) error {
+	fs := flag.NewFlagSet("import-events", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	files := fs.Args()
+	if len(files) == 0 {
+		return fmt.Errorf("少なくとも1つの .json ファイルを指定してください")
+	}
+
+	// DB の接続先は serve と同じ決め方（DATABASE_URL → LOCAL_DATABASE_URL）。
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("LOCAL_DATABASE_URL")
+	}
+	if dsn == "" {
+		return fmt.Errorf("DATABASE_URL (or LOCAL_DATABASE_URL) is not set")
+	}
+
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		return fmt.Errorf("connect to db: %w", err)
+	}
+	defer pool.Close()
+
+	svc := game.NewEventImportService(pool)
+
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		res, importErr := svc.ImportFile(context.Background(), f)
+		closeErr := f.Close()
+		if importErr != nil {
+			return fmt.Errorf("import %s: %w", path, importErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close %s: %w", path, closeErr)
+		}
+		log.Printf("%s: 入れた件数=%d 既にあった件数=%d", path, res.Inserted, res.AlreadyExisted)
 	}
 	return nil
 }
