@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 
@@ -43,6 +44,21 @@ describe('ReplayEventCutIn', () => {
     });
     expect(screen.getByRole('status').textContent).toContain(eventB.headline);
 
+    act(() => {
+      vi.advanceTimersByTime(3500);
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('StrictMode でも同じ出来事を 2 回出さない', () => {
+    render(
+      <StrictMode>
+        <ReplayEventCutIn events={[eventA]} />
+      </StrictMode>,
+    );
+    expect(screen.getByRole('status').textContent).toContain(eventA.headline);
+
+    // 更新関数の二重呼び出しで 2 件キューに入っていれば、ここで同じ出来事が再び出る。
     act(() => {
       vi.advanceTimersByTime(3500);
     });

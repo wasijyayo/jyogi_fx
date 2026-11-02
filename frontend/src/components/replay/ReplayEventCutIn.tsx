@@ -24,17 +24,17 @@ export default function ReplayEventCutIn({
   const [queue, setQueue] = useState<ReplayCutInEvent[]>([]);
 
   useEffect(() => {
-    setQueue((prev) => {
-      const next = [...prev];
-      let changed = false;
-      for (const event of events) {
-        if (seenRef.current.has(event.id)) continue;
-        seenRef.current.add(event.id);
-        next.push(event);
-        changed = true;
-      }
-      return changed ? next : prev;
-    });
+    // 重複判定と記録は effect 本体で行う。setQueue の更新関数に副作用を持たせると、
+    // StrictMode で更新関数が 2 回呼ばれたときにイベントが落ちる。
+    const fresh: ReplayCutInEvent[] = [];
+    for (const event of events) {
+      if (seenRef.current.has(event.id)) continue;
+      seenRef.current.add(event.id);
+      fresh.push(event);
+    }
+    if (fresh.length > 0) {
+      setQueue((prev) => [...prev, ...fresh]);
+    }
   }, [events]);
 
   const current = queue[0];

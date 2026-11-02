@@ -2,9 +2,13 @@ package server_test
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,9 +50,9 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 	dates := replayWeekdays(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
 	q := db.New(pool)
 
-	insertEvent := func(headline string, precision string, eventDate time.Time, dateValid, adopted bool) {
+	insertEvent := func(headline string, precision string, eventDate time.Time, dateValid, adopted bool) int64 {
 		t.Helper()
-		if _, err := q.CreateHistoricalEvent(ctx, db.CreateHistoricalEventParams{
+		event, err := q.CreateHistoricalEvent(ctx, db.CreateHistoricalEventParams{
 			Year:          2015,
 			EventDate:     pgtype.Date{Time: eventDate, Valid: dateValid},
 			DatePrecision: precision,
@@ -57,23 +61,37 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 			Category:      "テスト",
 			Source:        source,
 			Adopted:       adopted,
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatalf("insert event %q: %v", headline, err)
 		}
+		return event.ID
+	}
+
+	// 新聞に載る採用済みの出来事（id と見出し）。並びの期待値は md5(id::text) 順で作る。
+	type newspaperEvent struct {
+		id       int64
+		headline string
+	}
+	adopted := make([]newspaperEvent, 0, 5)
+	insertAdopted := func(headline string, precision string, eventDate time.Time, dateValid bool) {
+		t.Helper()
+		id := insertEvent(headline, precision, eventDate, dateValid, true)
+		adopted = append(adopted, newspaperEvent{id: id, headline: headline})
 	}
 
 	// 取引のない土曜。次の共通営業日（day_index 20）に割り当てる。
-	insertEvent("土曜日の出来事", "day", time.Date(2015, 1, 31, 0, 0, 0, 0, time.UTC), true, true)
+	insertAdopted("土曜日の出来事", "day", time.Date(2015, 1, 31, 0, 0, 0, 0, time.UTC), true)
 	// 区間の 2 日目（day_index 21）。
-	insertEvent("区間2日目の出来事", "day", dates[21], true, true)
+	insertAdopted("区間2日目の出来事", "day", dates[21], true)
 	// 月までしか分からない。新聞だけに載せる。
-	insertEvent("月までの出来事", "month", time.Time{}, false, true)
+	insertAdopted("月までの出来事", "month", time.Time{}, false)
 	// 未採用。新聞にもカットインにも出さない。
 	insertEvent("未採用の出来事", "day", dates[21], true, false)
 	// 区間の外（最後の共通営業日より後）。新聞だけに載せる。
-	insertEvent("区間外の出来事", "day", time.Date(2015, 12, 31, 0, 0, 0, 0, time.UTC), true, true)
+	insertAdopted("区間外の出来事", "day", time.Date(2015, 12, 31, 0, 0, 0, 0, time.UTC), true)
 	// 開始前の 20 日（day_index 5）。新聞だけに載せる。
-	insertEvent("開始前の出来事", "day", dates[5], true, true)
+	insertAdopted("開始前の出来事", "day", dates[5], true)
 
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	clock := &mutableClock{now: now}
@@ -123,18 +141,15 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 		}
 	}
 
-	// 並びは取り込み順（id 順）で、日付順にしない（日付の前後関係を推測させない）。
-	// 挿入した順: 土曜日 -> 区間2日目 -> 月まで -> 区間外 -> 開始前。
-	wantOrder := []string{
-		"土曜日の出来事",
-		"区間2日目の出来事",
-		"月までの出来事",
-		"区間外の出来事",
-		"開始前の出来事",
-	}
-	for i, want := range wantOrder {
-		if started.Newspaper[i].Headline != want {
-			t.Errorf("newspaper[%d] = %q, want %q（id 順で返す）", i, started.Newspaper[i].Headline, want)
+	// 並びは md5(id::text) による再現可能な固定順で、日付順でも取り込み順でもない
+	// （日付の前後関係を推測させない）。DB と同じ md5 を Go 側でも計算して期待値にする。
+	sort.Slice(adopted, func(i, j int) bool {
+		return newspaperOrderKey(adopted[i].id) < newspaperOrderKey(adopted[j].id)
+	})
+	for i, want := range adopted {
+		if started.Newspaper[i].Headline != want.headline {
+			t.Errorf("newspaper[%d] = %q, want %q（md5(id::text) 順で返す）",
+				i, started.Newspaper[i].Headline, want.headline)
 		}
 	}
 
@@ -220,4 +235,11 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 	if h := headlines(got.Events); len(h) != 2 || h[0] != "土曜日の出来事" || h[1] != "区間2日目の出来事" {
 		t.Errorf("published 2 events = %v, want [土曜日の出来事 区間2日目の出来事]", h)
 	}
+}
+
+// newspaperOrderKey は Postgres の md5(id::text) と同じ並びを作るためのキー。
+// 新聞の並びが日付順・取り込み順になっていないことを、DB と同じ計算で確かめる。
+func newspaperOrderKey(id int64) string {
+	sum := md5.Sum([]byte(strconv.FormatInt(id, 10)))
+	return hex.EncodeToString(sum[:])
 }
