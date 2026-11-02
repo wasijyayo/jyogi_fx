@@ -28,6 +28,7 @@ func cleanupReplayRankingRows(t *testing.T, pool *pgxpool.Pool, gameIDs []int64,
 			"replay_speed_changes",
 			"replay_game_rates",
 			"replay_game_days",
+			"replay_game_events",
 		} {
 			query := "DELETE FROM " + table + " WHERE game_id = ANY($1)"
 			if _, err := pool.Exec(cctx, query, gameIDs); err != nil {

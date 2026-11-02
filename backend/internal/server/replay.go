@@ -400,6 +400,7 @@ func replayStateToAPI(s game.ReplayState) apigen.ReplayGameState {
 		ClosedPositions:    replayPositionsToAPI(s.ClosedPositions),
 		CandlesByPair:      replayPairCandlesToAPI(s.Candles),
 		TotalUnrealizedPnl: s.TotalUnrealizedPnl.String(),
+		Events:             replayCutInEventsToAPI(s.Events),
 	}
 	if s.IntervalStart != nil {
 		out.IntervalStart = &openapiTypes.Date{Time: *s.IntervalStart}
@@ -470,5 +471,28 @@ func replayStartedToAPI(s game.ReplayStartResult) apigen.ReplayGameStarted {
 		PublishedDays: s.PublishedDays,
 		Pairs:         replayPairsToAPI(s.Pairs),
 		CandlesByPair: replayPairCandlesToAPI(s.Candles),
+		Newspaper:     replayNewspaperEventsToAPI(s.Newspaper),
 	}
+}
+
+func replayNewspaperEventsToAPI(events []game.ReplayNewspaperEvent) []apigen.ReplayNewspaperEvent {
+	out := make([]apigen.ReplayNewspaperEvent, 0, len(events))
+	for _, e := range events {
+		out = append(out, apigen.ReplayNewspaperEvent{
+			Headline:    e.Headline,
+			Description: e.Description,
+		})
+	}
+	return out
+}
+
+func replayCutInEventsToAPI(events []game.ReplayCutInEvent) []apigen.ReplayCutInEvent {
+	out := make([]apigen.ReplayCutInEvent, 0, len(events))
+	for _, e := range events {
+		out = append(out, apigen.ReplayCutInEvent{
+			Id:       e.ID,
+			Headline: e.Headline,
+		})
+	}
+	return out
 }

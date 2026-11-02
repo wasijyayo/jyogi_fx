@@ -16,6 +16,7 @@ const session = {
     publishedDays: 0,
     pairs: [],
     candlesByPair: [],
+    newspaper: [],
   },
 } as ReplaySession;
 

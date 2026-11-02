@@ -437,6 +437,64 @@ DATABASE_URL='postgres://...（本番 Neon の接続 URL）...' \
 
 ---
 
+## 2.3 出来事の取り込み（#116 REPLAY-6）
+
+過去チャートモード（`docs/design.md` §13）の新聞・カットインで使う出来事を DB に取り込む
+手動バッチ。**リクエストのたびに外部へ取りに行かない**（CLAUDE.md §1）ため、用意した
+JSON ファイルを引数で渡して実行する。本体は `internal/game.EventImportService`、
+エントリポイントは `cmd/app` の `import-events` サブコマンド。
+
+**出来事のデータ（実在・架空とも）はリポジトリにコミットしない。** 候補の選定とユーザーの
+採用確認は #119 で行う。`import-events` は既定で候補（`adopted = false`）として入れ、
+ゲームが使うのは採用済み（`adopted = true`）の行だけ。採用は #119 の手順で行う。
+
+### 入力ファイルの形式
+
+UTF-8 の JSON（オブジェクトの配列）。拡張子は `.json`。
+
+```json
+[
+  {
+    "date": "YYYY-MM-DD",
+    "headline": "見出しをここに書く",
+    "description": "説明をここに書く。相場への影響・値動き・売買の推奨は書かない",
+    "category": "分野",
+    "source": "出典",
+    "sourceUrl": "https://example.invalid/source",
+    "adopted": false
+  }
+]
+```
+
+| フィールド | 必須 | 内容 |
+|---|---|---|
+| `date` | 必須 | `YYYY-MM-DD`（日まで確定）、`YYYY-MM`（月まで）、`YYYY`（年まで）。形式で日付の精度を決める。月・年精度は日付を持たない |
+| `headline` | 必須 | 見出し（出来事の名前）。前後の空白は除く |
+| `description` | 必須 | 説明。前後の空白は除く |
+| `category` | 必須 | 分野 |
+| `source` | 必須 | 出典 |
+| `sourceUrl` | 任意 | 出典の URL |
+| `adopted` | 任意 | 採用済みか（既定は `false`） |
+
+- 知らないフィールドがあるとエラーになる。
+- 1 ファイルを 1 トランザクションで取り込む。途中でエラーになればそのファイルは何も入らない。
+- 同じ（`source`, 年, `headline`）の行は同じ出来事として扱う。**再実行しても行が増えず、
+  既存の行（採用状態・説明など）は上書きしない**。
+- ファイルごとに「入れた件数・既にあった件数」を表示する。
+- DB の接続先は serve と同じ決め方（`DATABASE_URL` → `LOCAL_DATABASE_URL`）。
+
+### コマンド
+
+```bash
+cd backend
+go run ./cmd/app import-events events-2020.json
+```
+
+本番（Neon）への取り込みは、`import-rates` と同じくユーザーが `DATABASE_URL` を明示して
+手動で行う（`.env` を丸ごと読まない）。
+
+---
+
 ## 3. Go 実装の約束
 
 - 全ての関数の第 1 引数は `ctx context.Context`
