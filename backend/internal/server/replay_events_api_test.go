@@ -123,6 +123,21 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 		}
 	}
 
+	// 並びは取り込み順（id 順）で、日付順にしない（日付の前後関係を推測させない）。
+	// 挿入した順: 土曜日 -> 区間2日目 -> 月まで -> 区間外 -> 開始前。
+	wantOrder := []string{
+		"土曜日の出来事",
+		"区間2日目の出来事",
+		"月までの出来事",
+		"区間外の出来事",
+		"開始前の出来事",
+	}
+	for i, want := range wantOrder {
+		if started.Newspaper[i].Headline != want {
+			t.Errorf("newspaper[%d] = %q, want %q（id 順で返す）", i, started.Newspaper[i].Headline, want)
+		}
+	}
+
 	auth := "Bearer " + started.Token
 	getState := func() struct {
 		PublishedDays int `json:"publishedDays"`

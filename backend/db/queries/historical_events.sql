@@ -15,9 +15,11 @@ RETURNING *;
 -- name: ListAdoptedHistoricalEventsForYear :many
 -- 新聞に載せる、開始年の採用済みの出来事を全件返す（日付の精度は問わない）。
 -- 日付は API では返さない（開始年だけを公開する。design.md §13「先読み対策」）。
+-- 並びは取り込み順（id）にする。event_date 順にすると、日付を出さなくても新聞の並びから
+-- 出来事の前後関係が分かってしまうため。
 SELECT * FROM historical_events
 WHERE year = $1 AND adopted
-ORDER BY event_date NULLS LAST, id;
+ORDER BY id;
 
 -- name: ListAdoptedDayEventsForYear :many
 -- カットインの候補になる、開始年・日まで確定した採用済みの出来事を返す。

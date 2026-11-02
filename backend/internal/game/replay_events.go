@@ -80,7 +80,7 @@ func replayEventAssignments(days []time.Time, events []db.HistoricalEvent) []rep
 
 // replayNewspaperEvents は開始年の採用済みの出来事を、新聞に載せる形（見出し・説明のみ）に
 // 変換する。日付の精度は問わない（月・年までしか分からない出来事も載せる）。
-// 日付は返さない。並びは呼び出し側が決めた順（historical_events の取得順）を保つ。
+// 日付は返さない。並びは呼び出し側が決めた順（新聞は取り込み順 = id 順）を保つ。
 func replayNewspaperEvents(events []db.HistoricalEvent) []ReplayNewspaperEvent {
 	newspaper := make([]ReplayNewspaperEvent, 0, len(events))
 	for _, event := range events {
