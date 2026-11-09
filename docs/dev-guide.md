@@ -439,61 +439,96 @@ DATABASE_URL='postgres://...（本番 Neon の接続 URL）...' \
 
 ## 2.3 出来事の取り込み（#116 REPLAY-6）
 
-過去チャートモード（`docs/design.md` §13）の新聞・カットインで使う出来事を DB に取り込む
-手動バッチ。**リクエストのたびに外部へ取りに行かない**（CLAUDE.md §1）ため、用意した
-JSON ファイルを引数で渡して実行する。本体は `internal/game.EventImportService`、
-エントリポイントは `cmd/app` の `import-events` サブコマンド。
+過去チャートモード（`docs/design.md` §13）の新聞・カットインで使う出来事は、
+**年ごとの JSON（`backend/data/events/<年>.json`）としてリポジトリに置く**。
+出来事のデータ（実在・架空とも）は PR で一覧を確認し、**マージで採用が確定する**。
+本番への取り込みは、マイグレーションと同じく `deploy.yml` が自動で行う（手動の取り込みは
+不要）。出来事のデータそのものは別 PR #119 で追加する。
 
-**出来事のデータ（実在・架空とも）はリポジトリにコミットしない。** 候補の選定とユーザーの
-採用確認は #119 で行う。`import-events` は既定で候補（`adopted = false`）として入れ、
-ゲームが使うのは採用済み（`adopted = true`）の行だけ。採用は #119 の手順で行う。
+**リクエストのたびに外部へ取りに行かない**（CLAUDE.md §1）ため、デプロイ時にリポジトリの
+JSON を読んで DB に同期する。本体は `internal/game.EventImportService`、エントリポイントは
+`cmd/app` の `import-events` サブコマンド。
+
+`import-events` は**ファイルを正とする同期**である。
+
+- ファイルにある出来事は `key` で upsert し、**既存の行も全項目を上書きする**
+  （見出し・説明・日付の修正を反映する）。取り込んだ行は採用済み（`adopted = true`）にする。
+- 渡したファイル全体に無い `key` の行は採用を外す（`adopted = false`）。**削除はしない**
+  （`replay_game_events` が参照しているため）。
+- 全ファイルを 1 トランザクションで処理する。1 件でも検証に失敗したら何も変えない。
+- **ファイルが 0 個、または出来事が 0 件のときは何もせず正常終了する**（全件の採用が
+  外れる事故を防ぐため）。ログにその旨を出す。
+- ゲームが使うのは採用済み（`adopted = true`）の行だけ。
 
 ### 入力ファイルの形式
 
-UTF-8 の JSON（オブジェクトの配列）。拡張子は `.json`。
+UTF-8 の JSON（オブジェクトの配列）。ファイル名は `<年>.json`（例: `2016.json`）。
+1 ファイル = 1 年分とし、**ファイル名の年と出来事の年を一致させる**。
 
 ```json
 [
   {
+    "key": "2016-uk-eu-referendum",
     "date": "YYYY-MM-DD",
     "headline": "見出しをここに書く",
     "description": "説明をここに書く。相場への影響・値動き・売買の推奨は書かない",
     "category": "分野",
     "source": "出典",
-    "sourceUrl": "https://example.invalid/source",
-    "adopted": false
+    "sourceUrl": "https://example.invalid/source"
   }
 ]
 ```
 
 | フィールド | 必須 | 内容 |
 |---|---|---|
+| `key` | 必須 | 取り込みの冪等キー。英小文字・数字・ハイフン（例: `2016-uk-eu-referendum`）。**全ファイルを通じて一意**にする |
 | `date` | 必須 | `YYYY-MM-DD`（日まで確定）、`YYYY-MM`（月まで）、`YYYY`（年まで）。形式で日付の精度を決める。月・年精度は日付を持たない |
 | `headline` | 必須 | 見出し（出来事の名前）。前後の空白は除く |
 | `description` | 必須 | 説明。前後の空白は除く |
 | `category` | 必須 | 分野 |
 | `source` | 必須 | 出典 |
 | `sourceUrl` | 任意 | 出典の URL |
-| `adopted` | 任意 | 採用済みか（既定は `false`） |
 
+- ファイルにある出来事はすべて採用済みとして扱う（`adopted` フィールドは無い）。
 - 知らないフィールドがあるとエラーになる。
-- 1 ファイルを 1 トランザクションで取り込む。途中でエラーになればそのファイルは何も入らない。
-- 同じ（`source`, 年, `headline`）の行は同じ出来事として扱う。**再実行しても行が増えず、
-  既存の行（採用状態・説明など）は上書きしない**。
-- 新聞の並びは `md5(id::text)` による再現可能な固定順で、日付順でも取り込み順でもない
-  （並びから出来事の前後関係が分からないようにするため）。
-- ファイルごとに「入れた件数・既にあった件数」を表示する。
-- DB の接続先は serve と同じ決め方（`DATABASE_URL` → `LOCAL_DATABASE_URL`）。
+- 見出しと説明に月日（「6月23日」「6/23」のような表記）を含めない。日付を出すと
+  先読みに使えるため（`docs/design.md` §13「先読み対策」）。
+
+### 検証
+
+`import-events` と、リポジトリのファイルを読むテスト
+（`internal/game.TestRepositoryEventFilesAreValid`）が同じ規則で検証する。
+ファイルが 0 個ならテストは成功する。ファイルを追加したら、通常の `go test ./...`（CI）で
+次を確認する。
+
+- `key` の形式（英小文字・数字・ハイフン）と、全ファイルを通じた重複
+- ファイル名の年と出来事の年の一致（ファイル名が `<年>.json` であること）
+- `date` の形式（`YYYY-MM-DD` / `YYYY-MM` / `YYYY`）
+- 必須項目（`key`・`date`・`headline`・`description`・`category`・`source`）
+- 見出し・説明に月日の表記が無いこと
 
 ### コマンド
 
+ローカルで手動実行する場合:
+
 ```bash
 cd backend
-go run ./cmd/app import-events events-2020.json
+go run ./cmd/app import-events data/events/2015.json data/events/2016.json
 ```
 
-本番（Neon）への取り込みは、`import-rates` と同じくユーザーが `DATABASE_URL` を明示して
-手動で行う（`.env` を丸ごと読まない）。
+- DB の接続先は serve と同じ決め方（`DATABASE_URL` → `LOCAL_DATABASE_URL`）。
+- ファイルごとの件数ではなく、全体の「取り込んだ件数・採用を外した件数」を表示する。
+- 新聞の並びは `md5(id::text)` による再現可能な固定順で、日付順でも取り込み順でもない
+  （並びから出来事の前後関係が分からないようにするため）。
+
+### 本番への反映
+
+`main` へのマージで `deploy.yml` が動き、マイグレーションの直後に
+`backend/data/events/*.json` があれば `import-events` で本番 DB と同期する。
+ファイルが無ければ何もせず、同期に失敗したらデプロイを止める。接続先はマイグレーションと
+同じ `PROD_DATABASE_URL`（`import-events` には `DATABASE_URL` として渡す）。
+URL はログに出さない。
+
 
 ---
 

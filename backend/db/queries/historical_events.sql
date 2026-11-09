@@ -2,15 +2,32 @@
 -- 出来事はテーブルの行として扱い、コードに見出しや日付を書かない。
 -- ゲームが使うのは採用済み（adopted = true）の行だけ。
 
--- name: CreateHistoricalEvent :one
--- 取り込み（import-events）で候補を 1 件入れる。再実行しても行を増やさないよう、
--- （source, year, headline）の一意キーで ON CONFLICT DO NOTHING にする。
--- 既存の行（採用状態・説明など）は上書きしない。既にある場合は pgx.ErrNoRows になる。
+-- name: UpsertHistoricalEvent :one
+-- 取り込み（import-events）で 1 件入れる。key を冪等キーにして、既にある行は
+-- 全項目を上書きする（見出し・説明・日付の修正を反映するため）。取り込んだ行は
+-- 採用済み（adopted = true）にする。
 INSERT INTO historical_events (
-    year, event_date, date_precision, headline, description, category, source, source_url, adopted
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (source, year, headline) DO NOTHING
+    key, year, event_date, date_precision, headline, description, category, source, source_url, adopted
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+ON CONFLICT (key) DO UPDATE SET
+    year = EXCLUDED.year,
+    event_date = EXCLUDED.event_date,
+    date_precision = EXCLUDED.date_precision,
+    headline = EXCLUDED.headline,
+    description = EXCLUDED.description,
+    category = EXCLUDED.category,
+    source = EXCLUDED.source,
+    source_url = EXCLUDED.source_url,
+    adopted = true
 RETURNING *;
+
+-- name: UnadoptHistoricalEventsNotInKeys :execrows
+-- 今回取り込んだファイル全体に無い key の行は採用を外す（削除はしない。
+-- replay_game_events が参照しているため）。0 件のときは呼び出さないこと
+-- （空配列を渡すと全件の採用が外れてしまう）。
+UPDATE historical_events
+SET adopted = false
+WHERE adopted AND NOT (key = ANY($1::text[]));
 
 -- name: ListAdoptedHistoricalEventsForYear :many
 -- 新聞に載せる、開始年の採用済みの出来事を全件返す（日付の精度は問わない）。

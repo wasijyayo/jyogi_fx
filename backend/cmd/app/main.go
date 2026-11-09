@@ -349,21 +349,26 @@ func runImportRates(args []string) error {
 	return nil
 }
 
-// runImportEvents は過去チャートモードの出来事（#116 REPLAY-6）を DB に取り込む
-// 手動バッチ。入力は UTF-8 の JSON（オブジェクトの配列）で、1 ファイル 1 トランザクション。
+// runImportEvents は過去チャートモードの出来事（#116 REPLAY-6）を DB に同期する
+// バッチ。入力は UTF-8 の JSON（オブジェクトの配列）で、ファイル名は <年>.json。
+// 渡したファイル全体を 1 トランザクションで処理する。
 //
-//	app import-events events-2020.json
+//	app import-events data/events/2015.json data/events/2016.json
 //
-// 既定では候補（採用未定）として入れる。採用の確認は #119 で行い、ゲームが使うのは
-// 採用済み（adopted = true）の行だけ。再実行しても行を増やさず、既存の行は上書きしない。
+// ファイルを正として同期する。ファイルにある出来事は key で upsert して採用済みにし、
+// 渡したファイル全体に無い key の行は採用を外す（削除はしない）。年ごとの JSON は
+// リポジトリに置き、PR のマージで採用を確定する。本番への取り込みは deploy.yml が
+// 自動で行う（docs/dev-guide.md §2.3）。ファイルが 0 個、または出来事が 0 件のときは
+// 全件の採用を外す事故を防ぐため何もせず正常終了する。
 func runImportEvents(args []string) error {
 	fs := flag.NewFlagSet("import-events", flag.ContinueOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	files := fs.Args()
-	if len(files) == 0 {
-		return fmt.Errorf("少なくとも1つの .json ファイルを指定してください")
+	paths := fs.Args()
+	if len(paths) == 0 {
+		log.Printf("import-events: 対象のファイルが 0 個のため、何もしません")
+		return nil
 	}
 
 	// DB の接続先は serve と同じ決め方（DATABASE_URL → LOCAL_DATABASE_URL）。
@@ -381,22 +386,24 @@ func runImportEvents(args []string) error {
 	}
 	defer pool.Close()
 
-	svc := game.NewEventImportService(pool)
-
-	for _, path := range files {
-		f, err := os.Open(path)
+	files := make([]game.EventImportFile, 0, len(paths))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("open %s: %w", path, err)
+			return fmt.Errorf("read %s: %w", path, err)
 		}
-		res, importErr := svc.ImportFile(context.Background(), f)
-		closeErr := f.Close()
-		if importErr != nil {
-			return fmt.Errorf("import %s: %w", path, importErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close %s: %w", path, closeErr)
-		}
-		log.Printf("%s: 入れた件数=%d 既にあった件数=%d", path, res.Inserted, res.AlreadyExisted)
+		files = append(files, game.EventImportFile{Name: filepath.Base(path), Data: data})
 	}
+
+	svc := game.NewEventImportService(pool)
+	res, err := svc.Import(context.Background(), files)
+	if err != nil {
+		return fmt.Errorf("import events: %w", err)
+	}
+	if res.Skipped {
+		log.Printf("import-events: 出来事が 0 件のため、何もしませんでした")
+		return nil
+	}
+	log.Printf("import-events: 取り込んだ件数=%d 採用を外した件数=%d", res.Upserted, res.Unadopted)
 	return nil
 }

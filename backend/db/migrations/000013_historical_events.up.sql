@@ -2,14 +2,17 @@
 --
 -- 出来事はコードにハードコードせず、テーブルの行として持つ（CLAUDE.md §5.3 と同じ考え方）。
 -- 実在・架空を問わず、出来事のデータ自体はこのマイグレーションでは投入しない。
--- 候補の選定と採用の確認は #119。取り込みは手動バッチ `cmd/app import-events`。
+-- 年ごとの JSON（backend/data/events/<年>.json）をリポジトリに置き、PR のマージで
+-- 採用が確定する。本番への取り込みは deploy.yml が import-events で自動的に行う
+-- （docs/dev-guide.md §2.3）。
 
--- historical_events: 候補・採用済みの出来事 1 件。
+-- historical_events: 採用済みの出来事 1 件。
 -- 日付は「日まで確定」「月まで」「年まで」の 3 段階の精度を持つ。
 -- 日まで確定した行だけ event_date を持ち、カットインの対象になり得る。
 -- 月・年までしか分からない行は新聞（開始年の一覧）にだけ載せる。
 CREATE TABLE historical_events (
     id            BIGSERIAL   PRIMARY KEY,
+    key           TEXT        NOT NULL,          -- 取り込みの冪等キー（例: 2016-uk-eu-referendum）
     year          INT         NOT NULL,          -- 開始年の判定に使う（event_date と一致する）
     event_date    DATE,                          -- 日まで確定した場合のみ。月・年精度では NULL
     date_precision TEXT       NOT NULL,          -- day / month / year
@@ -29,9 +32,11 @@ CREATE TABLE historical_events (
     CONSTRAINT historical_events_year_check CHECK (
         event_date IS NULL OR EXTRACT(YEAR FROM event_date) = year
     ),
-    -- import-events の冪等キー。同じ出典・同じ年・同じ見出しは同じ出来事として扱い、
-    -- 再実行しても行を増やさない（既存の行は上書きしない）。
-    UNIQUE (source, year, headline)
+    -- 取り込みの冪等キー。英小文字・数字・ハイフンだけで作り、全ファイルを通じて一意にする。
+    CONSTRAINT historical_events_key_format_check CHECK (
+        key ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+    ),
+    CONSTRAINT historical_events_key_key UNIQUE (key)
 );
 
 -- 新聞（開始年の採用済みの出来事）と、開始年・日精度の抽出に使う。

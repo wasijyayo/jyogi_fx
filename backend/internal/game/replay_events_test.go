@@ -13,6 +13,7 @@ import (
 func historicalEventForTest(id int64, date time.Time, adopted bool) db.HistoricalEvent {
 	return db.HistoricalEvent{
 		ID:            id,
+		Key:           "test-event",
 		Year:          int32(date.Year()),
 		EventDate:     pgtype.Date{Time: date, Valid: true},
 		DatePrecision: "day",
@@ -33,6 +34,7 @@ func TestReplayEventAssignments(t *testing.T) {
 
 	monthPrecision := db.HistoricalEvent{
 		ID:            30,
+		Key:           "test-event-month",
 		Year:          2015,
 		DatePrecision: "month",
 		Headline:      "月までしか分からない出来事",

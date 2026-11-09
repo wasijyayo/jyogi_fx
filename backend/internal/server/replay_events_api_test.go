@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -50,9 +51,14 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 	dates := replayWeekdays(time.Date(2015, 1, 5, 0, 0, 0, 0, time.UTC), 80)
 	q := db.New(pool)
 
+	eventSeq := 0
 	insertEvent := func(headline string, precision string, eventDate time.Time, dateValid, adopted bool) int64 {
 		t.Helper()
-		event, err := q.CreateHistoricalEvent(ctx, db.CreateHistoricalEventParams{
+		// key は英小文字・数字・ハイフンのみ。テスト内で一意にする。
+		eventSeq++
+		key := fmt.Sprintf("server-events-test-116-%d", eventSeq)
+		event, err := q.UpsertHistoricalEvent(ctx, db.UpsertHistoricalEventParams{
+			Key:           key,
 			Year:          2015,
 			EventDate:     pgtype.Date{Time: eventDate, Valid: dateValid},
 			DatePrecision: precision,
@@ -60,10 +66,16 @@ func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 			Description:   "テスト用の説明",
 			Category:      "テスト",
 			Source:        source,
-			Adopted:       adopted,
 		})
 		if err != nil {
 			t.Fatalf("insert event %q: %v", headline, err)
+		}
+		// import-events は採用済みで入れるため、未採用の行は明示的に外す。
+		if !adopted {
+			if _, err := pool.Exec(ctx,
+				`UPDATE historical_events SET adopted = false WHERE id = $1`, event.ID); err != nil {
+				t.Fatalf("unadopt event %q: %v", headline, err)
+			}
 		}
 		return event.ID
 	}

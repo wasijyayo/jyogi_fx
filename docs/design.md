@@ -1379,13 +1379,15 @@ CREATE TABLE replay_leverage_unlocks (
 ### 過去チャートモードの出来事テーブル（#116 REPLAY-6）
 
 出来事はコードにハードコードせず、テーブルの行として持つ。実在・架空を問わず、出来事の
-データ自体はマイグレーションで投入しない（候補の選定と採用確認は #119、取り込みは手動の
-`import-events`）。DDL はマイグレーション `000013_historical_events` で確定。
+データ自体はマイグレーションで投入しない（選定は #119。年ごとの JSON をリポジトリに置き、
+PR のマージで採用を確定する）。本番への取り込みは deploy.yml の `import-events` が自動で
+行う。DDL はマイグレーション `000013_historical_events` で確定。
 
 ```sql
--- 候補・採用済みの出来事。日付は「日まで」「月まで」「年まで」の精度を持つ。
+-- 採用済みの出来事。日付は「日まで」「月まで」「年まで」の精度を持つ。
 CREATE TABLE historical_events (
     id             BIGSERIAL   PRIMARY KEY,
+    key            TEXT        NOT NULL,          -- 取り込みの冪等キー（全ファイルで一意）
     year           INT         NOT NULL,          -- 開始年の判定に使う
     event_date     DATE,                          -- 日まで確定した場合のみ
     date_precision TEXT        NOT NULL,          -- day / month / year
@@ -1405,7 +1407,10 @@ CREATE TABLE historical_events (
     CONSTRAINT historical_events_year_check CHECK (
         event_date IS NULL OR EXTRACT(YEAR FROM event_date) = year
     ),
-    UNIQUE (source, year, headline)
+    CONSTRAINT historical_events_key_format_check CHECK (
+        key ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+    ),
+    UNIQUE (key)
 );
 
 -- ゲーム開始時に確定する「採用済みの出来事 → 区間の営業日」の対応。
@@ -1420,8 +1425,9 @@ CREATE TABLE replay_game_events (
 );
 ```
 
-`import-events` は同じ（出典・年・見出し）の行を `ON CONFLICT DO NOTHING` で扱い、
-再実行しても行を増やさず、既存の行（採用状態・説明など）を上書きしない。
+`import-events` は `key` を冪等キーにして `ON CONFLICT (key) DO UPDATE` で全項目を
+上書きする。ファイルにある出来事は採用済みにし、渡したファイル全体に無い `key` の行は
+採用を外す（削除はしない）。0 ファイル・0 件のときは何も変えない（docs/dev-guide.md §2.3）。
 
 ### UPSERT（冪等性の確保）
 
@@ -1772,10 +1778,12 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
 
 過去の大きな出来事を「何が起きた相場か」の手がかりとして出す。出来事はコードに
 ハードコードせず、`historical_events` テーブルの行として持つ（CLAUDE.md §5.3 と同じ考え方）。
-実在・架空を問わず、出来事のデータ自体はマイグレーションで投入しない。候補の選定と
-ユーザーの採用確認は #119 で行い、**ゲームが使うのは採用済み（`adopted = true`）の行だけ**。
-取り込みはダウンロードした JSON を読む手動バッチ（`cmd/app import-events`）で行い、
-プレイ中に外部 API を呼ばない（CLAUDE.md §1）。
+実在・架空を問わず、出来事のデータ自体はマイグレーションで投入しない。年ごとの JSON
+（`backend/data/events/<年>.json`）をリポジトリに置き、PR で一覧を確認してマージすることで
+採用が確定する（選定は #119）。**ゲームが使うのは採用済み（`adopted = true`）の行だけ**。
+本番への取り込みは deploy.yml が `cmd/app import-events` で自動的に行い、ファイルを正として
+同期する（`key` で upsert し、ファイルに無い `key` の行は採用を外す）。プレイ中に外部 API を
+呼ばない（CLAUDE.md §1）。形式・検証は docs/dev-guide.md §2.3。
 
 - **開始時の新聞**: 開始年（区間の 1 日目の年）の採用済みの出来事を**全件**、見出しと説明だけで
   出す。日付・月日・`day_index` は含めない。プレイ期間外の出来事も含む。年をまたいでも
@@ -1973,8 +1981,10 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
   ログインユーザーは 1 人 1 行（最高記録）、ゲストは 1 プレイ 1 行で上位 20 件を返す。
   同点は `finished_at` が最も早い記録を上にし、通常終了の `finished_at` は
   リクエスト時刻ではなく「60 日目が公開された論理的な時刻」を保存する（#104）。
-- #116 で `historical_events`（年・見出し・説明・分野・日付・日付の精度・出典・採用状態）と
-  `replay_game_events`（ゲーム × 採用済みの出来事 × `day_index` 20..79）を追加した。
-  出来事のデータはマイグレーションで投入しない。取り込みは手動の `import-events`、
-  採用の確認は #119。ゲームは採用済みの行だけを使う。DDL は §8 に反映済み。
+- #116 で `historical_events`（冪等キー `key`・年・見出し・説明・分野・日付・日付の精度・
+  出典・採用状態）と `replay_game_events`（ゲーム × 採用済みの出来事 × `day_index` 20..79）
+  を追加した。出来事のデータはマイグレーションで投入せず、年ごとの JSON
+  （`backend/data/events/<年>.json`）をリポジトリに置いて PR のマージで採用を確定する
+  （データは #119）。本番への取り込みは deploy.yml が `import-events` で自動同期する。
+  ゲームは採用済みの行だけを使う。DDL は §8 に反映済み。
 - ロジックは `internal/game` に置く（ハンドラにルールを書かない）。
