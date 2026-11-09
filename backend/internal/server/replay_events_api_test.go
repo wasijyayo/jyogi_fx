@@ -15,9 +15,42 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fxgame/backend/internal/db"
 )
+
+// historicalEventsAdvisoryLockKey は historical_events を共有するテストを直列化するための
+// Postgres のセッションレベル advisory lock のキー。game パッケージの
+// import_events_integration_test.go と同じキーを使う（テストのヘルパーはパッケージを
+// またげないため、定数は両方に書く）。import-events は「ファイルに無い key を全件
+// adopted=false にする」ため、このテストが作った採用済みの行まで外してしまい、
+// 新聞・カットインの検証が不定期に落ちる。同じキーで直列化する。
+const historicalEventsAdvisoryLockKey int64 = 116001
+
+// lockHistoricalEvents は専用コネクションでセッションの advisory lock を取る。
+// t.Cleanup で unlock とコネクションの解放を行う。行を INSERT する前（後始末の DELETE を
+// 登録する前）に呼ぶこと。t.Cleanup は LIFO なので、後から登録された DELETE が先に走り、
+// その後に unlock される。
+func lockHistoricalEvents(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire advisory lock connection: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, historicalEventsAdvisoryLockKey); err != nil {
+		conn.Release()
+		t.Fatalf("pg_advisory_lock: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(cctx, `SELECT pg_advisory_unlock($1)`, historicalEventsAdvisoryLockKey); err != nil {
+			t.Errorf("pg_advisory_unlock: %v", err)
+		}
+		conn.Release()
+	})
+}
 
 // mutableClock はテストの途中で時刻を進められるクロック（CLAUDE.md §5.1）。
 type mutableClock struct{ now time.Time }
@@ -31,6 +64,8 @@ func (c *mutableClock) Now() time.Time { return c.now }
 func TestReplayAPI_EventsHiddenUntilPublished(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
+	// advisory lock は行の INSERT より前に取り、後始末の DELETE より後に解放する。
+	lockHistoricalEvents(t, ctx, pool)
 	const source = "server-events-test-116"
 
 	// 出来事の後始末は seedReplayRates の後始末（replay_game_events・replay_games の削除）

@@ -9,6 +9,38 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// eventImportAdvisoryLockKey は historical_events を共有するテストを直列化するための
+// Postgres のセッションレベル advisory lock のキー。server パッケージの
+// replay_events_api_test.go と同じキーを使う（テストのヘルパーはパッケージをまたげない
+// ため、定数は両方に書く）。import-events は「ファイルに無い key を全件 adopted=false に
+// する」ため、並行して走る server の新聞・カットインのテストの採用済み行まで外してしまう。
+// 同じキーで直列化し、互いのテストが相手の行を壊さないようにする。
+const eventImportAdvisoryLockKey int64 = 116001
+
+// lockHistoricalEvents は専用コネクションでセッションの advisory lock を取る。
+// t.Cleanup で unlock とコネクションの解放を行う。呼び出し側は、このテストの行を
+// INSERT する前（後始末の DELETE を登録する前）に呼ぶこと。t.Cleanup は LIFO なので、
+// 後から登録された DELETE が先に走り、その後に unlock される。
+func lockHistoricalEvents(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire advisory lock connection: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, eventImportAdvisoryLockKey); err != nil {
+		conn.Release()
+		t.Fatalf("pg_advisory_lock: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(cctx, `SELECT pg_advisory_unlock($1)`, eventImportAdvisoryLockKey); err != nil {
+			t.Errorf("pg_advisory_unlock: %v", err)
+		}
+		conn.Release()
+	})
+}
+
 // eventImportTestCleanup はテスト専用の source の行を先に消し、後始末を登録する。
 // key は全ファイルを通じて一意なので、テストごとに別の key を使う。
 func eventImportTestCleanup(t *testing.T, ctx context.Context, pool *pgxpool.Pool, source string) {
@@ -54,6 +86,8 @@ func TestEventImport_SyncsFilesAsSourceOfTruth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := connectTestDB(t, ctx)
+	// advisory lock は行の INSERT より前に取り、後始末の DELETE より後に解放する。
+	lockHistoricalEvents(t, ctx, pool)
 
 	const source = "import-events-test-116-sync"
 	const keyA = "test-116-sync-a"
@@ -108,6 +142,8 @@ func TestEventImport_ValidationFailureChangesNothing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := connectTestDB(t, ctx)
+	// advisory lock は行の INSERT より前に取り、後始末の DELETE より後に解放する。
+	lockHistoricalEvents(t, ctx, pool)
 
 	const source = "import-events-test-116-validation"
 	const keyA = "test-116-validation-a"
@@ -149,6 +185,8 @@ func TestEventImport_ZeroEventsChangesNothing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := connectTestDB(t, ctx)
+	// advisory lock は行の INSERT より前に取り、後始末の DELETE より後に解放する。
+	lockHistoricalEvents(t, ctx, pool)
 
 	const source = "import-events-test-116-zero"
 	const key = "test-116-zero-a"
@@ -193,6 +231,8 @@ func TestEventImport_DuplicateKeyFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := connectTestDB(t, ctx)
+	// advisory lock は行の INSERT より前に取り、後始末の DELETE より後に解放する。
+	lockHistoricalEvents(t, ctx, pool)
 
 	const source = "import-events-test-116-duplicate"
 	const key = "test-116-duplicate-a"
