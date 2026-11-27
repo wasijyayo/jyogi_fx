@@ -34,7 +34,7 @@ func TestHelpCommand(t *testing.T) {
 		if title, _ := embed["title"].(string); !strings.Contains(title, "遊び方") {
 			t.Errorf("title = %q, want 遊び方を含む", title)
 		}
-		if got := embedFieldValue(t, resp, 0, "🕛 取引時間"); !strings.Contains(got, "12:00〜13:00") {
+		if got := embedFieldValue(t, resp, 0, "🕛 取引時間"); !strings.Contains(got, "11:00〜12:00") {
 			t.Errorf("取引時間 = %q", got)
 		}
 		if buttons := responseComponentButtons(resp); len(buttons) != 0 {

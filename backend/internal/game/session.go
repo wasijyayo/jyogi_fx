@@ -16,7 +16,7 @@ import (
 	"fxgame/backend/internal/db"
 )
 
-// lastNewOrderMinuteJST は「終了1分前」の開始分（12:59）。この分に入ったら
+// lastNewOrderMinuteJST は「終了1分前」の開始分（11:59）。この分に入ったら
 // 新規注文を受け付けない（確定 #14/#48。design.md §7.10）。
 // 決済（クローズ）はこの時間帯も許可する仕様のため、この定数・関連関数を
 // 決済可否の判定に使い回さないこと。
@@ -30,7 +30,7 @@ type SessionConfig struct {
 	AlwaysOpen bool
 }
 
-// IsSessionOpen は now（JST換算）が取引時間（JST 12:00〜13:00毎日、確定 #13）内かを返す。
+// IsSessionOpen は now（JST換算）が取引時間（JST 11:00〜12:00毎日、確定 #13）内かを返す。
 // 時刻は必ず引数で受ける（CLAUDE.md §5.1）。internal/game 配下で time.Now() を直接呼ばない。
 func (cfg SessionConfig) IsSessionOpen(now time.Time) bool {
 	if cfg.AlwaysOpen {
@@ -40,7 +40,7 @@ func (cfg SessionConfig) IsSessionOpen(now time.Time) bool {
 	return minuteOfDay >= sessionStartMinuteJST && minuteOfDay < sessionStartMinuteJST+sessionDurationMinutes
 }
 
-// IsNewOrderAllowed はセッション中かつ終了1分前（12:59台）を過ぎていないかを返す
+// IsNewOrderAllowed はセッション中かつ終了1分前（11:59台）を過ぎていないかを返す
 // （確定 #14/#48。design.md §7.10「駆け込み取引の制限」）。
 //
 // **新規注文にのみ使うこと。** 既存ポジションの決済（クローズ）は同時間帯も
@@ -107,8 +107,8 @@ func (cfg SessionConfig) MarketStatus(now time.Time) MarketStatus {
 		return MarketStatus{Open: true, RemainingMinutes: &remaining}
 	}
 
-	// 時間外。開始時刻は sessionStartMinuteJST 定数から時・分を求める（12:00 を
-	// 二重定義しない）。終了後（13:00 以降）なら翌日、開始前なら当日。
+	// 時間外。開始時刻は sessionStartMinuteJST 定数から時・分を求める（11:00 を
+	// 二重定義しない）。終了後（12:00 以降）なら翌日、開始前なら当日。
 	jstNow := now.In(jst)
 	startHour := sessionStartMinuteJST / 60
 	startMinute := sessionStartMinuteJST % 60

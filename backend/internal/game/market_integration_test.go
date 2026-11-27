@@ -27,7 +27,7 @@ func TestGetCurrencySummary_前日比を算出する(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 1, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 1, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "MKTPCT", 999801, epoch)
 
 	// 前日（2099-01-01）のセッションと、その最終 close（100）を用意する。
@@ -74,7 +74,7 @@ func TestGetCurrencySummary_前日比を算出する(t *testing.T) {
 		}
 	})
 
-	now := time.Date(2099, 1, 2, 12, 0, 0, 0, jst) // 「今日」＝前日の翌日
+	now := time.Date(2099, 1, 2, 11, 0, 0, 0, jst) // 「今日」＝前日の翌日
 	svc := NewQuoteService(pool, RealClock{})
 	got, err := svc.GetCurrencySummary(ctx, now, "MKTPCT")
 	if err != nil {
@@ -101,7 +101,7 @@ func TestGetCurrencySummary_前日セッションが無ければ前日比はnil(
 	defer cancel()
 	pool := connectTestDB(t, ctx)
 
-	epoch := time.Date(2099, 1, 3, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 1, 3, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "MKTPCTNONE", 999802, epoch)
 	t.Cleanup(func() {
 		cctx := context.Background()

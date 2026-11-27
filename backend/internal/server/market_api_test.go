@@ -137,8 +137,8 @@ func TestGetMarketStatus(t *testing.T) {
 	pool := newTestPool(t)
 
 	t.Run("開催中は残り時間を返す", func(t *testing.T) {
-		// 12:30 JST はセッション中（残り30分）。
-		clock := fixedClock{now: time.Date(2026, 1, 1, 12, 30, 0, 0, jst)}
+		// 11:30 JST はセッション中（残り30分）。
+		clock := fixedClock{now: time.Date(2026, 1, 1, 11, 30, 0, 0, jst)}
 		mux := newMux(t, pool, clock, false)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/market/status", nil)
@@ -172,8 +172,8 @@ func TestGetMarketStatus(t *testing.T) {
 	})
 
 	t.Run("時間外は次の開始時刻を返す", func(t *testing.T) {
-		// 13:30 JST は時間外（次の開始は翌日12:00）。
-		clock := fixedClock{now: time.Date(2026, 1, 1, 13, 30, 0, 0, jst)}
+		// 12:30 JST は時間外（次の開始は翌日11:00）。
+		clock := fixedClock{now: time.Date(2026, 1, 1, 12, 30, 0, 0, jst)}
 		mux := newMux(t, pool, clock, false)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/market/status", nil)

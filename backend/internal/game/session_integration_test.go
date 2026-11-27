@@ -58,7 +58,7 @@ func TestOpenSession(t *testing.T) {
 	}
 
 	// 実運用と衝突しない明確に架空の日時。
-	now := time.Date(2099, 1, 1, 12, 0, 0, 0, jst)
+	now := time.Date(2099, 1, 1, 11, 0, 0, 0, jst)
 
 	svc := NewSessionService(pool, RealClock{}, SessionConfig{})
 	session, err := svc.OpenSession(ctx, now)
@@ -177,7 +177,7 @@ func TestOpenSession_初回はopenがinitial_priceになる(t *testing.T) {
 		t.Skipf("%s には既に price_ticks が存在するためスキップ（初回セッションではない）", c.Symbol)
 	}
 
-	now := time.Date(2099, 6, 1, 12, 0, 0, 0, jst)
+	now := time.Date(2099, 6, 1, 11, 0, 0, 0, jst)
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {

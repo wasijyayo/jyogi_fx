@@ -20,7 +20,7 @@ export function useIsMarketOpen(): boolean {
 export function canPlaceOrder(status: MarketStatus): boolean {
   if (status.alwaysOpen) return true;
   if (!status.open) return false;
-  // open かつ remainingMinutes <= 1 は「終了1分前」（12:59台）。
+  // open かつ remainingMinutes <= 1 は「終了1分前」（11:59台）。
   // remainingMinutes が null になるのは仕様上 alwaysOpen のみなので、安全側に true を返す。
   return status.remainingMinutes == null || status.remainingMinutes > 1;
 }

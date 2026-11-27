@@ -52,7 +52,7 @@ func TestTickService_notifyEvents_予兆と発火が1回ずつ投稿され冪等
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 10, 12, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
+	epoch := time.Date(2099, 4, 10, 11, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
 	c := insertTestCurrency(t, ctx, pool, "EVTNOTIFY", 777001, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 4, 10, 0, 0, 0, 0, jst), Valid: true}
@@ -138,7 +138,7 @@ func TestTickService_notifySessionOpen(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 14, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 14, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "GAPNOTIFY", 777004, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 4, 14, 0, 0, 0, 0, jst), Valid: true}
@@ -211,7 +211,7 @@ func TestTickService_notifyLiquidations(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 11, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 11, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "LIQNOTIFY", 777002, epoch)
 
 	userID := "test-liq-notify-user"
@@ -261,7 +261,7 @@ func TestTickService_notifyClosingIfLastTick_冪等(t *testing.T) {
 	q := db.New(pool)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 4, 12, 0, 0, 0, 0, jst), Valid: true}
-	opened := time.Date(2099, 4, 12, 12, 0, 0, 0, jst)
+	opened := time.Date(2099, 4, 12, 11, 0, 0, 0, jst)
 	closed := opened.Add(time.Hour)
 
 	t.Cleanup(func() {
@@ -322,7 +322,7 @@ func TestTradeService_PlaceOrder_大口取引通知(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 13, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 13, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "BIGTRADE", 777003, epoch)
 
 	userID := "test-large-trade-user"
@@ -388,7 +388,7 @@ func TestTradeService_ClosePosition_利益確定通知(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 15, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 15, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "PROFITNOTIFY", 777005, epoch)
 
 	userID := "test-profit-notify-user"

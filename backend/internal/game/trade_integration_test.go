@@ -39,7 +39,7 @@ func TestPlaceOrder_成行注文で残高が減りポジションが作られ価
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
 	c := insertTestCurrency(t, ctx, pool, "TRADEBUY", 999101, epoch)
 
 	userID := "test-trade-buy-user"
@@ -158,7 +158,7 @@ func TestPlaceOrder_売り注文は圧力を下げ名目金額に応じた証拠
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "TRADESELL", 999102, epoch)
 
 	userID := "test-trade-sell-user"
@@ -233,7 +233,7 @@ func TestPlaceOrder_拒否された注文は残高もポジションも変化し
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "TRADEREJECT", 999103, epoch)
 
 	userID := "test-trade-reject-user"
@@ -343,7 +343,7 @@ func TestClosePosition_損益が計算され残高と圧力に反映される(t 
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			symbol := fmt.Sprintf("TRADECLOSE%d", i)
-			epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+			epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 			c := insertTestCurrency(t, ctx, pool, symbol, 999200+int64(i), epoch)
 
 			userID := fmt.Sprintf("test-trade-close-user-%d", i)
@@ -464,7 +464,7 @@ func TestClosePosition_生涯累計pipsが決済のたびにネットで積み�
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 2, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 2, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "LIFEPIPS", 999210, epoch)
 
 	userID := "test-lifetime-pips-user"
@@ -533,7 +533,7 @@ func TestClosePosition_他人のポジションは決済できない(t *testing.
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "TRADECLOSEOWNER", 999210, epoch)
 
 	ownerID := "test-trade-close-owner"
@@ -634,7 +634,7 @@ func TestClosePosition_決済済みポジションは再決済できない(t *te
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "TRADECLOSETWICE", 999211, epoch)
 
 	userID := "test-trade-close-twice-user"

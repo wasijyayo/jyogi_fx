@@ -30,7 +30,7 @@ func TestPlaceOrder_入力検証はDBに触る前に弾かれる(t *testing.T) {
 	// AlwaysOpen: true にして、セッション判定ではなく検証対象の項目だけを切り出して確認する。
 	sessionSvc := NewSessionService(nil, RealClock{}, SessionConfig{AlwaysOpen: true})
 	svc := NewTradeService(nil, RealClock{}, sessionSvc, nil, decimal.Zero, decimal.Zero, nil)
-	now := time.Date(2026, 1, 1, 12, 30, 0, 0, jst)
+	now := time.Date(2026, 1, 1, 11, 30, 0, 0, jst)
 
 	tests := []struct {
 		name    string
@@ -128,7 +128,7 @@ func TestPlaceOrder_セッション外は新規注文を拒否する(t *testing.
 		now  time.Time
 	}{
 		{"セッション外(深夜)", time.Date(2026, 1, 1, 3, 0, 0, 0, jst)},
-		{"終了1分前(12:59台、確定#14/#48)", time.Date(2026, 1, 1, 12, 59, 0, 0, jst)},
+		{"終了1分前(11:59台、確定#14/#48)", time.Date(2026, 1, 1, 11, 59, 0, 0, jst)},
 	}
 
 	for _, tt := range tests {

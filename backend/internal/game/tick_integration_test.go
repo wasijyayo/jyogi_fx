@@ -99,7 +99,7 @@ func TestTick_60回呼んでセッションをシミュレートできる(t *tes
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 1, 15, 12, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
+	epoch := time.Date(2099, 1, 15, 11, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
 	c := insertTestCurrency(t, ctx, pool, "TICKSIM", 999001, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 1, 15, 0, 0, 0, 0, jst), Valid: true}
@@ -259,7 +259,7 @@ func TestTick_同じtickを2回実行しても壊れない(t *testing.T) {
 	})
 	tickSvc := NewTickService(pool, RealClock{}, sessionSvc, liquidationSvc, claimSvc, nil, nil, nil)
 
-	start := time.Date(2032, 6, 15, 12, 0, 0, 0, jst)
+	start := time.Date(2032, 6, 15, 11, 0, 0, 0, jst)
 	if err := tickSvc.Tick(ctx, start); err != nil {
 		t.Fatalf("Tick(寄り付き): %v", err)
 	}

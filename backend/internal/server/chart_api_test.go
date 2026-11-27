@@ -16,7 +16,7 @@ func TestGetCandles_HTTP(t *testing.T) {
 	pool := newTestPool(t)
 
 	t.Run("不正なresolutionは400", func(t *testing.T) {
-		mux := newMux(t, pool, fixedClock{now: time.Date(2099, 7, 1, 12, 5, 0, 0, jst)}, false)
+		mux := newMux(t, pool, fixedClock{now: time.Date(2099, 7, 1, 11, 5, 0, 0, jst)}, false)
 		req := httptest.NewRequest(http.MethodGet, "/api/currencies/JOG/candles?resolution=15m", nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -27,7 +27,7 @@ func TestGetCandles_HTTP(t *testing.T) {
 	})
 
 	t.Run("存在しない通貨は404", func(t *testing.T) {
-		mux := newMux(t, pool, fixedClock{now: time.Date(2099, 7, 1, 12, 5, 0, 0, jst)}, false)
+		mux := newMux(t, pool, fixedClock{now: time.Date(2099, 7, 1, 11, 5, 0, 0, jst)}, false)
 		req := httptest.NewRequest(http.MethodGet, "/api/currencies/NOSUCH/candles?resolution=1m", nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -39,7 +39,7 @@ func TestGetCandles_HTTP(t *testing.T) {
 
 	t.Run("1mを200で返す（decimalは文字列）", func(t *testing.T) {
 		ctx := context.Background()
-		epoch := time.Date(2099, 7, 1, 12, 0, 0, 0, jst)
+		epoch := time.Date(2099, 7, 1, 11, 0, 0, 0, jst)
 
 		// 使い捨て通貨 + 当日セッション + 寄り付き1本を投入する。
 		if _, err := pool.Exec(ctx, `
@@ -82,7 +82,7 @@ func TestGetCandles_HTTP(t *testing.T) {
 			}
 		})
 
-		mux := newMux(t, pool, fixedClock{now: time.Date(2099, 7, 1, 12, 5, 0, 0, jst)}, false)
+		mux := newMux(t, pool, fixedClock{now: time.Date(2099, 7, 1, 11, 5, 0, 0, jst)}, false)
 		req := httptest.NewRequest(http.MethodGet, "/api/currencies/HTTPCHRT/candles?resolution=1m", nil)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)

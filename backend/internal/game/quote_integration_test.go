@@ -20,7 +20,7 @@ func TestQuote_変動率とスパークラインを算出する(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 8, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 8, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "QUOTETEST", 999601, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 8, 1, 0, 0, 0, 0, jst), Valid: true}
@@ -109,7 +109,7 @@ func TestQuote_保存済みtickが無ければ変化率0でスパークライン
 	defer cancel()
 	pool := connectTestDB(t, ctx)
 
-	epoch := time.Date(2099, 8, 2, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 8, 2, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "QUOTENOTICKS", 999602, epoch)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM currencies WHERE id = $1`, c.ID)

@@ -343,7 +343,7 @@ type ClosePositionResult struct {
 //  8. 反対売買としての需給圧力インパクトを反映する（#33 UpdatePressure。design.md §2.2）
 //
 // セッション時間による制限はしない。既存ポジションの決済はセッション外・
-// 終了1分前（12:59台）を含め常に許可する（確定#48。design.md §7.10）。
+// 終了1分前（11:59台）を含め常に許可する（確定#48。design.md §7.10）。
 // PlaceOrder の IsNewOrderAllowed をここで使い回さないこと。
 //
 // 必ず1トランザクションで囲む（dev-guide.md §3）。

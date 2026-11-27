@@ -74,13 +74,13 @@ func TestScaleAt(t *testing.T) {
 		tick int64
 		want decimal.Decimal
 	}{
-		{"セッション開始ちょうど(12:00)", 12 * 60, decimal.NewFromInt(1)},
-		{"セッション中(12:30)", 12*60 + 30, decimal.NewFromInt(1)},
-		{"セッション終了直前(12:59)", 12*60 + 59, decimal.NewFromInt(1)},
-		{"セッション終了ちょうど(13:00)はセッション外", 13 * 60, offSessionScale},
-		{"セッション開始直前(11:59)はセッション外", 12*60 - 1, offSessionScale},
+		{"セッション開始ちょうど(11:00)", 11 * 60, decimal.NewFromInt(1)},
+		{"セッション中(11:30)", 11*60 + 30, decimal.NewFromInt(1)},
+		{"セッション終了直前(11:59)", 11*60 + 59, decimal.NewFromInt(1)},
+		{"セッション終了ちょうど(12:00)はセッション外", 12 * 60, offSessionScale},
+		{"セッション開始直前(10:59)はセッション外", 11*60 - 1, offSessionScale},
 		{"深夜はセッション外", 3 * 60, offSessionScale},
-		{"日をまたいだ翌日の12:00もセッション中", minutesPerDay + 12*60, decimal.NewFromInt(1)},
+		{"日をまたいだ翌日の11:00もセッション中", minutesPerDay + 11*60, decimal.NewFromInt(1)},
 	}
 
 	for _, tt := range tests {

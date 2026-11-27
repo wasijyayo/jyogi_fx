@@ -22,7 +22,7 @@ func TestGetCandles_1分足と5分足と発火済みイベント(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 5, 10, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 5, 10, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "CHRTTICKS", 999201, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 5, 10, 0, 0, 0, 0, jst), Valid: true}
@@ -97,7 +97,7 @@ func TestGetCandles_1分足と5分足と発火済みイベント(t *testing.T) {
 		t.Fatalf("mark resolved: %v", err)
 	}
 
-	now := time.Date(2099, 5, 10, 12, 10, 0, 0, jst) // currentTick = 10
+	now := time.Date(2099, 5, 10, 11, 10, 0, 0, jst) // currentTick = 10
 	svc := NewQuoteService(pool, RealClock{})
 
 	t.Run("1分足", func(t *testing.T) {
@@ -178,7 +178,7 @@ func TestGetCandles_セッションが無ければ空(t *testing.T) {
 	defer cancel()
 	pool := connectTestDB(t, ctx)
 
-	epoch := time.Date(2099, 6, 20, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 6, 20, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "CHRTEMPTY", 999202, epoch)
 	t.Cleanup(func() {
 		cctx := context.Background()
@@ -191,7 +191,7 @@ func TestGetCandles_セッションが無ければ空(t *testing.T) {
 	})
 
 	// セッション行を作らないまま、当日（2099-06-20）を指す now で呼ぶ。
-	now := time.Date(2099, 6, 20, 12, 30, 0, 0, jst)
+	now := time.Date(2099, 6, 20, 11, 30, 0, 0, jst)
 	svc := NewQuoteService(pool, RealClock{})
 	got, err := svc.GetCandles(ctx, now, "CHRTEMPTY", Resolution1m)
 	if err != nil {
@@ -212,7 +212,7 @@ func TestGetCandles_存在しない通貨はErrCurrencyNotFound(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 
 	svc := NewQuoteService(pool, RealClock{})
-	if _, err := svc.GetCandles(ctx, time.Date(2099, 6, 20, 12, 0, 0, 0, jst), "NOSUCH", Resolution1m); err == nil {
+	if _, err := svc.GetCandles(ctx, time.Date(2099, 6, 20, 11, 0, 0, 0, jst), "NOSUCH", Resolution1m); err == nil {
 		t.Fatal("GetCandles(存在しない通貨) = nil, want ErrCurrencyNotFound")
 	} else if err != ErrCurrencyNotFound {
 		t.Errorf("GetCandles(存在しない通貨) = %v, want ErrCurrencyNotFound", err)

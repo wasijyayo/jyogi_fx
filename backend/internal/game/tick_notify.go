@@ -137,7 +137,7 @@ func buildSessionGaps(ctx context.Context, q *db.Queries, currencies []db.Curren
 }
 
 // lastTickGraceWindow は「このtickがセッション最後のtickか」の判定に使う猶予。
-// 通常はセッション終了のちょうど1分前（12:59台）が最後のtickになる
+// 通常はセッション終了のちょうど1分前（11:59台）が最後のtickになる
 // （design.md §4: セッションは60分・毎分tick）。
 const lastTickGraceWindow = time.Minute
 

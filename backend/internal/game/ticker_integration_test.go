@@ -26,7 +26,7 @@ func TestTickerService_Update(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 3, 1, 12, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
+	epoch := time.Date(2099, 3, 1, 11, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
 	c := insertTestCurrency(t, ctx, pool, "TICKERSVC", 555001, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 3, 1, 0, 0, 0, 0, jst), Valid: true}
@@ -167,7 +167,7 @@ func TestTickerService_Update_ID保存に失敗したら投稿を補償削除す
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 3, 2, 12, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
+	epoch := time.Date(2099, 3, 2, 11, 0, 0, 0, jst) // 実運用と衝突しない架空の未来日
 	c := insertTestCurrency(t, ctx, pool, "TICKERCOMP", 555002, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 3, 2, 0, 0, 0, 0, jst), Valid: true}
