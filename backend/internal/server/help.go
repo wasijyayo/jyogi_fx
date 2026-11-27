@@ -26,7 +26,7 @@ func handleHelpCommand(_ context.Context, cfg Config) interactionResponseData {
 			Fields: []discordEmbedField{
 				{
 					Name:  "🕛 取引時間",
-					Value: "毎日 **12:00〜13:00**（日本時間）だけ取引できます。\n12:59 からは新しい注文はできませんが、決済はできます。",
+					Value: "毎日 **11:00〜12:00**（日本時間）だけ取引できます。\n11:59 からは新しい注文はできませんが、決済はできます。",
 				},
 				{
 					Name: "🔰 はじめかた",

@@ -44,7 +44,7 @@ func TestTradeAPI(t *testing.T) {
 
 	// 使い捨て通貨の epoch_at を固定時刻に合わせ、tickIndex=0 で約定価格=base_price=100 に
 	// する（AGENTS.md: 実在通貨で tick を回すと BasePrice が極端に遅くなる問題を避ける）。
-	now := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	now := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	clock := fixedClock{now: now}
 
 	const userID = "web2-trade-user"

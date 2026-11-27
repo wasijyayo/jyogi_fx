@@ -86,8 +86,8 @@ func setupRankingTestSession(t *testing.T, ctx context.Context, q *db.Queries, d
 	session, err := q.CreateGameSession(ctx, db.CreateGameSessionParams{
 		Date:     pgtype.Date{Time: dayStart, Valid: true},
 		Seed:     1,
-		OpenedAt: pgtype.Timestamptz{Time: dayStart.Add(12 * time.Hour), Valid: true},
-		ClosedAt: pgtype.Timestamptz{Time: dayStart.Add(13 * time.Hour), Valid: true},
+		OpenedAt: pgtype.Timestamptz{Time: dayStart.Add(11 * time.Hour), Valid: true},
+		ClosedAt: pgtype.Timestamptz{Time: dayStart.Add(12 * time.Hour), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("CreateGameSession: %v", err)
@@ -102,7 +102,7 @@ func TestRankByTodayChange_セッションが無ければエラー(t *testing.T)
 	defer cancel()
 	pool := connectTestDB(t, ctx)
 
-	now := time.Date(2096, 5, 1, 12, 30, 0, 0, jst) // 他のテストと衝突しない架空の日付
+	now := time.Date(2096, 5, 1, 11, 30, 0, 0, jst) // 他のテストと衝突しない架空の日付
 	svc := NewRankingService(pool, RealClock{})
 	if _, err := svc.RankByTodayChange(ctx, now); !errors.Is(err, ErrNoSessionToday) {
 		t.Errorf("RankByTodayChange(セッション無し) = %v, want ErrNoSessionToday", err)
@@ -126,7 +126,7 @@ func TestRankByTodayChange_変化率降順で並ぶ(t *testing.T) {
 	setupTradeTestUser(t, ctx, q, gainerID, decimal.NewFromInt(2000))
 	setupTradeTestUser(t, ctx, q, loserID, decimal.NewFromInt(500))
 
-	now := time.Date(2095, 5, 1, 12, 30, 0, 0, jst)
+	now := time.Date(2095, 5, 1, 11, 30, 0, 0, jst)
 	session := setupRankingTestSession(t, ctx, q, now)
 	t.Cleanup(func() {
 		cctx := context.Background()
@@ -190,7 +190,7 @@ func TestRecordDailySnapshots_冪等(t *testing.T) {
 	_, _ = pool.Exec(ctx, `DELETE FROM users WHERE discord_id = $1`, userID)
 	setupTradeTestUser(t, ctx, q, userID, decimal.NewFromInt(1234))
 
-	now := time.Date(2094, 5, 1, 12, 30, 0, 0, jst)
+	now := time.Date(2094, 5, 1, 11, 30, 0, 0, jst)
 	session := setupRankingTestSession(t, ctx, q, now)
 	t.Cleanup(func() {
 		cctx := context.Background()

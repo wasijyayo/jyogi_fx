@@ -22,7 +22,7 @@ func TestStoreSessionEvents_抽選結果がDBに保存され再抽選しない(t
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 7, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 7, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "EVENTSTORE", 999501, epoch)
 
 	sessionDate := pgtype.Date{Time: time.Date(2099, 7, 1, 0, 0, 0, 0, jst), Valid: true}
@@ -121,7 +121,7 @@ func TestOpenSession_その日のイベントが抽選される(t *testing.T) {
 
 	// 実運用と衝突しない明確に架空の未来日（TestOpenSessionと同じ2099年だが
 	// 日付を変えて競合を避ける）。
-	now := time.Date(2099, 2, 1, 12, 0, 0, 0, jst)
+	now := time.Date(2099, 2, 1, 11, 0, 0, 0, jst)
 
 	svc := NewSessionService(pool, RealClock{}, SessionConfig{})
 	session, err := svc.OpenSession(ctx, now)

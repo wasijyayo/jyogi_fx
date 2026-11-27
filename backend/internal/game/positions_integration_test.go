@@ -18,7 +18,7 @@ func TestListOpenPositions_含み損益込みで返す(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 9, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 9, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "POSLIST", 999701, epoch)
 
 	userID := "test-positions-list-user"

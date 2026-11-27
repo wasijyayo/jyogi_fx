@@ -58,7 +58,7 @@ func TestLiquidateOpenPositions_清算基準を割ったポジションが強制
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "LIQFIRE", 999301, epoch)
 
 	userID := "test-liquidation-fire-user"
@@ -123,7 +123,7 @@ func TestLiquidateOpenPositions_清算距離内のポジションは維持され
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "LIQSAFE", 999302, epoch)
 
 	userID := "test-liquidation-safe-user"
@@ -177,7 +177,7 @@ func TestTick_セッション外の時刻を注入しても清算は実行され
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 4, 1, 12, 0, 0, 0, jst) // JST 12:00 = セッション開始時刻
+	epoch := time.Date(2099, 4, 1, 11, 0, 0, 0, jst) // JST 11:00 = セッション開始時刻
 	c := insertTestCurrency(t, ctx, pool, "LIQOFFSESSION", 999303, epoch)
 
 	userID := "test-liquidation-offsession-user"

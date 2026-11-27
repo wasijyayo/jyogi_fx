@@ -13,13 +13,13 @@ func TestSessionConfig_IsSessionOpen(t *testing.T) {
 		time time.Time
 		want bool
 	}{
-		{"開始ちょうど(12:00 JST)", time.Date(2026, 1, 1, 12, 0, 0, 0, jst), true},
-		{"セッション中(12:30 JST)", time.Date(2026, 1, 1, 12, 30, 0, 0, jst), true},
-		{"終了直前(12:59:59 JST)", time.Date(2026, 1, 1, 12, 59, 59, 0, jst), true},
-		{"終了ちょうど(13:00 JST)はセッション外", time.Date(2026, 1, 1, 13, 0, 0, 0, jst), false},
-		{"開始直前(11:59 JST)はセッション外", time.Date(2026, 1, 1, 11, 59, 0, 0, jst), false},
+		{"開始ちょうど(11:00 JST)", time.Date(2026, 1, 1, 11, 0, 0, 0, jst), true},
+		{"セッション中(11:30 JST)", time.Date(2026, 1, 1, 11, 30, 0, 0, jst), true},
+		{"終了直前(11:59:59 JST)", time.Date(2026, 1, 1, 11, 59, 59, 0, jst), true},
+		{"終了ちょうど(12:00 JST)はセッション外", time.Date(2026, 1, 1, 12, 0, 0, 0, jst), false},
+		{"開始直前(10:59 JST)はセッション外", time.Date(2026, 1, 1, 10, 59, 0, 0, jst), false},
 		{"深夜はセッション外", time.Date(2026, 1, 1, 3, 0, 0, 0, jst), false},
-		{"UTCで渡されても内部でJST変換して判定する(UTC 3:00=JST 12:00)", time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC), true},
+		{"UTCで渡されても内部でJST変換して判定する(UTC 2:00=JST 11:00)", time.Date(2026, 1, 1, 2, 0, 0, 0, time.UTC), true},
 	}
 
 	for _, tt := range tests {
@@ -52,11 +52,11 @@ func TestSessionConfig_IsNewOrderAllowed(t *testing.T) {
 		time time.Time
 		want bool
 	}{
-		{"セッション中盤(12:30)は許可", time.Date(2026, 1, 1, 12, 30, 0, 0, jst), true},
-		{"終了1分前の境目直前(12:58:59)は許可", time.Date(2026, 1, 1, 12, 58, 59, 0, jst), true},
-		{"終了1分前(12:59:00)は拒否（確定 #14/#48）", time.Date(2026, 1, 1, 12, 59, 0, 0, jst), false},
-		{"終了1分前台の途中(12:59:30)も拒否", time.Date(2026, 1, 1, 12, 59, 30, 0, jst), false},
-		{"セッション外(13:00)は拒否", time.Date(2026, 1, 1, 13, 0, 0, 0, jst), false},
+		{"セッション中盤(11:30)は許可", time.Date(2026, 1, 1, 11, 30, 0, 0, jst), true},
+		{"終了1分前の境目直前(11:58:59)は許可", time.Date(2026, 1, 1, 11, 58, 59, 0, jst), true},
+		{"終了1分前(11:59:00)は拒否（確定 #14/#48）", time.Date(2026, 1, 1, 11, 59, 0, 0, jst), false},
+		{"終了1分前台の途中(11:59:30)も拒否", time.Date(2026, 1, 1, 11, 59, 30, 0, jst), false},
+		{"セッション外(12:00)は拒否", time.Date(2026, 1, 1, 12, 0, 0, 0, jst), false},
 	}
 
 	for _, tt := range tests {

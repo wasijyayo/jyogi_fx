@@ -33,8 +33,8 @@ func setupClaimTestSession(t *testing.T, ctx context.Context, q *db.Queries, dat
 	session, err := q.CreateGameSession(ctx, db.CreateGameSessionParams{
 		Date:     pgtype.Date{Time: dayStart, Valid: true},
 		Seed:     1,
-		OpenedAt: pgtype.Timestamptz{Time: dayStart.Add(12 * time.Hour), Valid: true},
-		ClosedAt: pgtype.Timestamptz{Time: dayStart.Add(13 * time.Hour), Valid: true},
+		OpenedAt: pgtype.Timestamptz{Time: dayStart.Add(11 * time.Hour), Valid: true},
+		ClosedAt: pgtype.Timestamptz{Time: dayStart.Add(12 * time.Hour), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("CreateGameSession: %v", err)
@@ -65,7 +65,7 @@ func TestClaim_中央値以下のユーザーは1点5倍を受け取る(t *testi
 	setupTradeTestUser(t, ctx, q, poorID, decimal.Zero)
 	setupTradeTestUser(t, ctx, q, richID, decimal.NewFromInt(10_000_000))
 
-	now := time.Date(2099, 5, 1, 12, 30, 0, 0, jst)
+	now := time.Date(2099, 5, 1, 11, 30, 0, 0, jst)
 	session := setupClaimTestSession(t, ctx, q, now)
 	t.Cleanup(func() {
 		cctx := context.Background()
@@ -130,7 +130,7 @@ func TestClaim_セッションが寄り付いていなければ利用できな�
 	pool := connectTestDB(t, ctx)
 
 	// 2098-05-01 という他のテストと衝突しない架空の日付。game_sessions 行を作らない。
-	now := time.Date(2098, 5, 1, 12, 30, 0, 0, jst)
+	now := time.Date(2098, 5, 1, 11, 30, 0, 0, jst)
 
 	claimSvc := NewClaimService(pool, RealClock{}, testClaimConfig())
 	if _, err := claimSvc.Claim(ctx, now, "test-claim-no-session-user"); !errors.Is(err, ErrClaimNotAvailable) {
@@ -147,7 +147,7 @@ func TestClaim_中央値未算出なら利用できない(t *testing.T) {
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	now := time.Date(2097, 5, 1, 12, 30, 0, 0, jst)
+	now := time.Date(2097, 5, 1, 11, 30, 0, 0, jst)
 	session := setupClaimTestSession(t, ctx, q, now)
 	t.Cleanup(func() {
 		cctx := context.Background()
@@ -169,7 +169,7 @@ func TestTotalAssetsByUser_未決済ポジションの含み損益を含む(t *t
 	pool := connectTestDB(t, ctx)
 	q := db.New(pool)
 
-	epoch := time.Date(2099, 6, 1, 12, 0, 0, 0, jst)
+	epoch := time.Date(2099, 6, 1, 11, 0, 0, 0, jst)
 	c := insertTestCurrency(t, ctx, pool, "CLAIMPNL", 999401, epoch)
 
 	userID := "test-claim-pnl-user"

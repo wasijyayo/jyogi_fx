@@ -19,36 +19,36 @@ func TestSessionConfig_MarketStatus(t *testing.T) {
 	}{
 		{
 			name:          "開始ちょうど(12:00)は残り60分",
-			now:           time.Date(2026, 1, 1, 12, 0, 0, 0, jst),
+			now:           time.Date(2026, 1, 1, 11, 0, 0, 0, jst),
 			wantOpen:      true,
 			wantRemaining: intPtr(60),
 		},
 		{
-			name:          "セッション中盤(12:30)は残り30分",
-			now:           time.Date(2026, 1, 1, 12, 30, 0, 0, jst),
+			name:          "セッション中盤(11:30)は残り30分",
+			now:           time.Date(2026, 1, 1, 11, 30, 0, 0, jst),
 			wantOpen:      true,
 			wantRemaining: intPtr(30),
 		},
 		{
 			name:          "終了直前(12:59)は残り1分",
-			now:           time.Date(2026, 1, 1, 12, 59, 59, 0, jst),
+			now:           time.Date(2026, 1, 1, 11, 59, 59, 0, jst),
 			wantOpen:      true,
 			wantRemaining: intPtr(1),
 		},
 		{
 			name:          "開始前(11:30)は当日12:00開始",
-			now:           time.Date(2026, 1, 1, 11, 30, 0, 0, jst),
-			wantNextStart: timePtr(time.Date(2026, 1, 1, 12, 0, 0, 0, jst)),
+			now:           time.Date(2026, 1, 1, 10, 30, 0, 0, jst),
+			wantNextStart: timePtr(time.Date(2026, 1, 1, 11, 0, 0, 0, jst)),
 		},
 		{
 			name:          "終了後(13:30)は翌日12:00開始",
-			now:           time.Date(2026, 1, 1, 13, 30, 0, 0, jst),
-			wantNextStart: timePtr(time.Date(2026, 1, 2, 12, 0, 0, 0, jst)),
+			now:           time.Date(2026, 1, 1, 12, 30, 0, 0, jst),
+			wantNextStart: timePtr(time.Date(2026, 1, 2, 11, 0, 0, 0, jst)),
 		},
 		{
 			name:          "深夜(3:00)は当日12:00開始",
 			now:           time.Date(2026, 1, 1, 3, 0, 0, 0, jst),
-			wantNextStart: timePtr(time.Date(2026, 1, 1, 12, 0, 0, 0, jst)),
+			wantNextStart: timePtr(time.Date(2026, 1, 1, 11, 0, 0, 0, jst)),
 		},
 	}
 
