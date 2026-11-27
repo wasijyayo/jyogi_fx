@@ -61,6 +61,21 @@ export default function ReplayIntro({ session, onStart, starting, error }: Repla
           これから 60 営業日の値動きが、標準の速さで 3 秒ごとに 1 日ずつ公開されます。
           開始前の 20 営業日は、予想の材料として最初から見えます。
         </p>
+        <section className={styles.newspaperEvents} aria-label={`${session.started.startYear}年の出来事`}>
+          <h2 className={styles.newspaperEventsTitle}>{session.started.startYear}年の出来事</h2>
+          {session.started.newspaper.length === 0 ? (
+            <p className={styles.newspaperEmpty}>この年の出来事の記録はありません。</p>
+          ) : (
+            <ul className={styles.newspaperEventList}>
+              {session.started.newspaper.map((event, index) => (
+                <li key={`${index}-${event.headline}`} className={styles.newspaperEvent}>
+                  <p className={styles.newspaperEventHeadline}>{event.headline}</p>
+                  <p className={styles.newspaperEventDescription}>{event.description}</p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
         <ul className={styles.newspaperList}>
           <li>仮想資金は 1000。最終資金がスコアになります。</li>
           <li>複数の通貨ペアを同時に保有でき、買い・売りの両方を扱えます。</li>

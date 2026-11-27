@@ -87,6 +87,22 @@ jobs:
           fi
           migrate -path backend/db/migrations -database "$PROD_DATABASE_URL" up
 
+      # 出来事（design.md §13）は年ごとの JSON（backend/data/events/<年>.json）を
+      # リポジトリに置き、PR のマージで採用を確定する。マイグレーションの直後に、
+      # ファイルがあれば本番 DB と同期する（ファイルを正とし、ファイルに無い key の行は
+      # 採用を外す）。接続先はマイグレーションと同じ PROD_DATABASE_URL で、
+      # import-events は DATABASE_URL を読むため環境変数で渡す。
+      # URL をログに出さないため、echo や set -x は使わない。失敗したらデプロイを止める。
+      - name: Sync historical events to production
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          if ! compgen -G "backend/data/events/*.json" > /dev/null; then
+            echo "backend/data/events/*.json が無いため、出来事の同期を飛ばします"
+            exit 0
+          fi
+          (cd backend && DATABASE_URL="$PROD_DATABASE_URL" go run ./cmd/app import-events data/events/*.json)
+
       - id: auth
         uses: google-github-actions/auth@v2
         with:

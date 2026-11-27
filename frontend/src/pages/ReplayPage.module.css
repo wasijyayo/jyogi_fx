@@ -181,9 +181,82 @@
   font-size: 17px;
 }
 
-/* 右列の出来事枠（#116 で使う。今はプレースホルダのみ。 #138 REPLAY-13）。 */
+/* 右列の出来事枠（#116）。プレイ中は開始年の新聞の一覧を出す。 */
 .eventsCard {
   min-height: 100px;
+}
+
+.playEventList {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.playEvent {
+  padding: 8px 0;
+  border-top: 1px solid #eee;
+}
+
+.playEvent:first-child {
+  border-top: none;
+}
+
+.playEventHeadline {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.playEventDescription {
+  margin: 0;
+  color: #555;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 出来事のカットイン（#116）。時間を止めず、注文の操作を妨げないようポインターは通す。 */
+.cutIn {
+  position: fixed;
+  top: 76px;
+  left: 50%;
+  z-index: 120;
+  width: min(420px, calc(100% - 32px));
+  padding: 12px 18px;
+  border: 1px solid #c9a227;
+  border-radius: 8px;
+  background: rgba(28, 28, 28, 0.94);
+  color: #f7f3e8;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: cutInIn 260ms ease-out both;
+}
+
+.cutInKicker {
+  margin: 0 0 4px;
+  color: #d8c27a;
+  font-size: 11px;
+  letter-spacing: 0.25em;
+}
+
+.cutInHeadline {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+@keyframes cutInIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .positionsCard {
@@ -306,6 +379,56 @@
   line-height: 1.9;
 }
 
+/* 開始年の出来事（#116）。日付・月日は出さない。 */
+.newspaperEvents {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-top: 1px solid #c9bfa5;
+  border-bottom: 1px solid #c9bfa5;
+}
+
+.newspaperEventsTitle {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.newspaperEmpty {
+  margin: 0;
+  color: #555;
+  font-size: 13px;
+  text-align: center;
+}
+
+.newspaperEventList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.newspaperEvent {
+  padding: 8px 0;
+  border-top: 1px dotted #c9bfa5;
+}
+
+.newspaperEvent:first-child {
+  border-top: none;
+}
+
+.newspaperEventHeadline {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.newspaperEventDescription {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
 .newspaperList {
   margin: 0 0 14px;
   padding-left: 20px;
@@ -401,7 +524,8 @@
 @media (prefers-reduced-motion: reduce) {
   .introYear,
   .newspaper,
-  .countdownNumber {
+  .countdownNumber,
+  .cutIn {
     animation: none;
   }
 }

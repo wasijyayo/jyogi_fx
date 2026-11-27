@@ -1378,6 +1378,59 @@ CREATE TABLE replay_leverage_unlocks (
 );
 ```
 
+### 過去チャートモードの出来事テーブル（#116 REPLAY-6）
+
+出来事はコードにハードコードせず、テーブルの行として持つ。実在・架空を問わず、出来事の
+データ自体はマイグレーションで投入しない（選定は #119。年ごとの JSON をリポジトリに置き、
+PR のマージで採用を確定する）。本番への取り込みは deploy.yml の `import-events` が自動で
+行う。DDL はマイグレーション `000013_historical_events` で確定。
+
+```sql
+-- 採用済みの出来事。日付は「日まで」「月まで」「年まで」の精度を持つ。
+CREATE TABLE historical_events (
+    id             BIGSERIAL   PRIMARY KEY,
+    key            TEXT        NOT NULL,          -- 取り込みの冪等キー（全ファイルで一意）
+    year           INT         NOT NULL,          -- 開始年の判定に使う
+    event_date     DATE,                          -- 日まで確定した場合のみ
+    date_precision TEXT        NOT NULL,          -- day / month / year
+    headline       TEXT        NOT NULL,
+    description    TEXT        NOT NULL,          -- 相場への影響・売買の推奨は書かない
+    category       TEXT        NOT NULL,
+    source         TEXT        NOT NULL,
+    source_url     TEXT,
+    adopted        BOOLEAN     NOT NULL DEFAULT false, -- ゲームが使うのは true だけ
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT historical_events_precision_check CHECK (
+        date_precision IN ('day', 'month', 'year')
+    ),
+    CONSTRAINT historical_events_date_check CHECK (
+        (date_precision = 'day') = (event_date IS NOT NULL)
+    ),
+    CONSTRAINT historical_events_year_check CHECK (
+        event_date IS NULL OR EXTRACT(YEAR FROM event_date) = year
+    ),
+    CONSTRAINT historical_events_key_format_check CHECK (
+        key ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+    ),
+    UNIQUE (key)
+);
+
+-- ゲーム開始時に確定する「採用済みの出来事 → 区間の営業日」の対応。
+CREATE TABLE replay_game_events (
+    id          BIGSERIAL   PRIMARY KEY,
+    game_id     BIGINT      NOT NULL REFERENCES replay_games(id),
+    event_id    BIGINT      NOT NULL REFERENCES historical_events(id),
+    day_index   INT         NOT NULL,          -- 20..79（区間の 60 日）
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (game_id, event_id),
+    CONSTRAINT replay_game_events_day_check CHECK (day_index BETWEEN 20 AND 79)
+);
+```
+
+`import-events` は `key` を冪等キーにして `ON CONFLICT (key) DO UPDATE` で全項目を
+上書きする。ファイルにある出来事は採用済みにし、渡したファイル全体に無い `key` の行は
+採用を外す（削除はしない）。0 ファイル・0 件のときは何も変えない（docs/dev-guide.md §2.3）。
+
 ### UPSERT（冪等性の確保）
 
 ```sql
@@ -1723,7 +1776,35 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
 
 画面は #105 で実装する。チャートは**日足のローソク足**（1 本 = 1 営業日）。
 
-今後の要望（#116）: 過去の大きな出来事があった日に、画面に知らせを出す。
+### 出来事の新聞とカットイン（#116 REPLAY-6）
+
+過去の大きな出来事を「何が起きた相場か」の手がかりとして出す。出来事はコードに
+ハードコードせず、`historical_events` テーブルの行として持つ（CLAUDE.md §5.3 と同じ考え方）。
+実在・架空を問わず、出来事のデータ自体はマイグレーションで投入しない。年ごとの JSON
+（`backend/data/events/<年>.json`）をリポジトリに置き、PR で一覧を確認してマージすることで
+採用が確定する（選定は #119）。**ゲームが使うのは採用済み（`adopted = true`）の行だけ**。
+本番への取り込みは deploy.yml が `cmd/app import-events` で自動的に行い、ファイルを正として
+同期する（`key` で upsert し、ファイルに無い `key` の行は採用を外す）。プレイ中に外部 API を
+呼ばない（CLAUDE.md §1）。形式・検証は docs/dev-guide.md §2.3。
+
+- **開始時の新聞**: 開始年（区間の 1 日目の年）の採用済みの出来事を**全件**、見出しと説明だけで
+  出す。日付・月日・`day_index` は含めない。プレイ期間外の出来事も含む。年をまたいでも
+  開始年の一覧を維持し、翌年分に切り替えたり追加したりしない。出来事が 0 件の年でも
+  ゲームは動き、画面は壊れない。相場への影響・値動き・売買の推奨は書かない。
+  **並びは `md5(id::text)` による再現可能な固定順とし、日付順や取り込み順にしない。**
+  日付順や取り込み順にすると、日付を出さなくても並びから出来事の前後関係が分かってしまうため。
+- **カットイン**: 次のすべてを満たす出来事だけを、その日が公開された時点で名前だけ出す。
+  - 日まで確定している（月・年までしか分からないものは新聞だけに載せる）
+  - 開始年の出来事
+  - `day_index` が 20〜79（区間の 60 日。開始前の 20 日は対象外）
+  - 取引のない日（週末・祝日など）の出来事は、その日以降で最初に取引がある**共通営業日**に
+    割り当てる。割り当て先が区間の外なら出さない。
+  - ゲーム開始時に、採用済みの出来事と `day_index` の対応を `replay_game_events` に保存する。
+  - 同じ出来事は 1 回だけ出す。同時に重なったら順番に出す。時間を止めず、注文ボタンを
+    隠さない。文言に相場への影響・値動き・売買の推奨を出さない。
+  - 状態取得は**公開済みの日に当たる出来事だけ**を返し、未公開の日の対応は返さない。
+    開始の応答は新聞用の一覧（見出し・説明のみ、日付なし）を返す。
+- 終了後に横長の年間の帯で時期を振り返る表示は今回作らない（ゲーム要素を優先）。
 
 ### 注文・損益・強制決済（#111 で決定）
 
@@ -1796,11 +1877,13 @@ GitHub Issues の `design-decision` ラベル（#13〜#19, #23, #47, #48、epic�
 
 サーバーは「開始からの経過時間」から公開済みの営業日数を計算し、
 **それより先の価格は返さない**。区間の正確な日付も終了までどの API からも取得できない
-（開始年は開始時から公開する）。
+（開始年は開始時から公開する）。**ただし、出来事の名前から発生日を推測できることは許容する**
+（新聞は日付の数字を出さず、カットインは発生日に名前を出すだけにする）。
 
 - 注文はサーバーが現在の公開レートで約定させる。ブラウザから価格を指定させない。
 - **公開されている過去データとの照合は防がない（許容する）。** 開始年と値動きが見えるので、
-  プレイヤーが同じ過去データを調べれば区間を特定でき、先の値動きも分かる。
+  プレイヤーが同じ過去データを調べれば区間を特定でき、先の値動きも分かる。カットインで
+  分かる出来事の日付も、この照合の対象に含める。
   仲間内のゲームで、過去の相場を知っていること自体も実力のうちと考え、価格の加工などの対策はしない。
   問題になったら、開始年を伏せる・価格を一定の比率でずらすなどを検討する。
 - ゲストには、ゲーム開始時に推測できないゲームトークンを発行し、以降の操作はそのトークンで行う。
@@ -1900,4 +1983,10 @@ CLAUDE.md §1（サーバーは常時起動しない）を守る。
   ログインユーザーは 1 人 1 行（最高記録）、ゲストは 1 プレイ 1 行で上位 20 件を返す。
   同点は `finished_at` が最も早い記録を上にし、通常終了の `finished_at` は
   リクエスト時刻ではなく「60 日目が公開された論理的な時刻」を保存する（#104）。
+- #116 で `historical_events`（冪等キー `key`・年・見出し・説明・分野・日付・日付の精度・
+  出典・採用状態）と `replay_game_events`（ゲーム × 採用済みの出来事 × `day_index` 20..79）
+  を追加した。出来事のデータはマイグレーションで投入せず、年ごとの JSON
+  （`backend/data/events/<年>.json`）をリポジトリに置いて PR のマージで採用を確定する
+  （データは #119）。本番への取り込みは deploy.yml が `import-events` で自動同期する。
+  ゲームは採用済みの行だけを使う。DDL は §8 に反映済み。
 - ロジックは `internal/game` に置く（ハンドラにルールを書かない）。
