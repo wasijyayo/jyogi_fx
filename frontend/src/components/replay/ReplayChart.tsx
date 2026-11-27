@@ -13,6 +13,7 @@ import {
 } from 'lightweight-charts';
 
 import type { ReplayCandle, ReplayPosition } from '../../api/generated/model';
+import { candleSeriesColors } from '../../lib/chart';
 import { REPLAY_PRE_DAYS, replayDayLabel, replayPricePrecision } from '../../lib/replay';
 import styles from '../../pages/ReplayPage.module.css';
 
@@ -159,7 +160,7 @@ export default function ReplayChart({ pairId, candles, positions }: ReplayChartP
       handleScroll: false,
       handleScale: false,
     });
-    const series = chart.addSeries(CandlestickSeries, {});
+    const series = chart.addSeries(CandlestickSeries, { ...candleSeriesColors });
     chartRef.current = chart;
     seriesRef.current = series;
     priceLinesRef.current = [];

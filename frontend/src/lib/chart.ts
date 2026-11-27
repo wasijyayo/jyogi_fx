@@ -11,7 +11,23 @@ import type { Candle } from '../api/generated/model';
 // ONE_MINUTE_SECONDS は1分足のステップ幅（秒）。
 export const ONE_MINUTE_SECONDS = 60;
 
-// OPENING_CANDLE_COLOR は寄り付き足（is_opening = TRUE）の色。実価格の赤/緑（up/down）と
+// CANDLE_UP_COLOR / CANDLE_DOWN_COLOR はローソク足の陽線（上昇）・陰線（下落）の色。
+// 日本の証券会社でなじみのある「上昇は赤・下落は青」にする（ユーザー要望）。
+// 通常モード（PriceChart）と過去チャートモード（ReplayChart）で同じ色を使うため、ここで一元管理する。
+export const CANDLE_UP_COLOR = '#ef5350';
+export const CANDLE_DOWN_COLOR = '#2979ff';
+
+// candleSeriesColors は CandlestickSeries に渡す陽線・陰線の色指定。
+export const candleSeriesColors = {
+  upColor: CANDLE_UP_COLOR,
+  downColor: CANDLE_DOWN_COLOR,
+  borderUpColor: CANDLE_UP_COLOR,
+  borderDownColor: CANDLE_DOWN_COLOR,
+  wickUpColor: CANDLE_UP_COLOR,
+  wickDownColor: CANDLE_DOWN_COLOR,
+} as const;
+
+// OPENING_CANDLE_COLOR は寄り付き足（is_opening = TRUE）の色。実価格の赤/青（up/down）と
 // 区別できる橙にする（design.md §2.8「is_opening = TRUE の行は色を変える」）。
 export const OPENING_CANDLE_COLOR = '#ff9800';
 
