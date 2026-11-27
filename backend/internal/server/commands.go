@@ -66,7 +66,7 @@ func handleSlashCommand(ctx context.Context, cfg Config, req interactionRequest,
 	case discord.CommandPips:
 		return handleLifetimePipsCommand(ctx, cfg)
 	case discord.CommandHelp:
-		return handleHelpCommand(cfg)
+		return handleHelpCommand(ctx, cfg)
 	default:
 		return unimplementedCommandResponse(req.Data.Name)
 	}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 
 	"fxgame/backend/internal/discord"
@@ -15,7 +16,7 @@ import (
 // 文面と実際の値がずれないよう数字では書かない。
 //
 // 案内は本人が読むためのものなので、チャンネルを流さないよう ephemeral にする。
-func handleHelpCommand(cfg Config) interactionResponseData {
+func handleHelpCommand(_ context.Context, cfg Config) interactionResponseData {
 	resp := interactionResponseData{
 		Embeds: []discordEmbed{{
 			Title: "📘 遊び方",
