@@ -21,6 +21,7 @@ import type { Candle, ChartEvent, GetCandlesResolution } from '../api/generated/
 import {
   ONE_MINUTE_SECONDS,
   candleBodyColor,
+  candleSeriesColors,
   formatEventLabel,
   interpolateMissingCandles,
   isoToUnixSeconds,
@@ -78,11 +79,8 @@ export default function PriceChart({ candles, events, resolution }: PriceChartPr
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#26a69a',
-      downColor: '#ef5350',
+      ...candleSeriesColors,
       borderVisible: false,
-      wickUpColor: '#26a69a',
-      wickDownColor: '#ef5350',
     });
 
     // base_price は「人がいなかった場合の価格」の薄い線（design.md §3.4）。
