@@ -83,6 +83,14 @@ func TestOpenSession(t *testing.T) {
 	if !session.Date.Valid || session.Date.Time.Year() != 2099 {
 		t.Errorf("session.Date = %+v, want 2099年", session.Date)
 	}
+	// 開始・終了時刻は取引時間の定数どおり（JST 11:00〜12:00）に保存される。
+	// ずれると終了通知・日次まとめが送られない（#144 の CodeRabbit 指摘）。
+	if want := time.Date(2099, 1, 1, 11, 0, 0, 0, jst); !session.OpenedAt.Time.Equal(want) {
+		t.Errorf("session.OpenedAt = %v, want %v", session.OpenedAt.Time, want)
+	}
+	if want := time.Date(2099, 1, 1, 12, 0, 0, 0, jst); !session.ClosedAt.Time.Equal(want) {
+		t.Errorf("session.ClosedAt = %v, want %v", session.ClosedAt.Time, want)
+	}
 
 	rows, err := pool.Query(ctx, `SELECT currency_id, open, close, high, low, is_opening
 		FROM price_ticks WHERE session_id = $1`, session.ID)

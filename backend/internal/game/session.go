@@ -170,8 +170,10 @@ func (s *SessionService) MarketStatus(now time.Time) MarketStatus {
 func (s *SessionService) OpenSession(ctx context.Context, now time.Time) (db.GameSession, error) {
 	jstNow := now.In(jst)
 	sessionDate := time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 0, 0, 0, 0, jst)
-	openedAt := time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 12, 0, 0, 0, jst)
-	closedAt := time.Date(jstNow.Year(), jstNow.Month(), jstNow.Day(), 13, 0, 0, 0, jst)
+	// 開始・終了時刻は sessionStartMinuteJST / sessionDurationMinutes から求める
+	// （時刻を二重定義すると、取引時間を変えたときに終了通知・日次まとめがずれる。#144）。
+	openedAt := sessionDate.Add(sessionStartMinuteJST * time.Minute)
+	closedAt := openedAt.Add(sessionDurationMinutes * time.Minute)
 
 	seed, err := randomSessionSeed()
 	if err != nil {
